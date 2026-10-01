@@ -1,0 +1,37 @@
+# Unity-generated caches and local editor state
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Bb]uild/
+/[Bb]uilds/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+/.vs/
+/.idea/
+*.csproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.pidb
+*.booproj
+*.svd
+*.opendb
+*.VC.db
+sysinfo.txt
+.DS_Store
+Thumbs.db
+
+# Local UOS encryption key and service settings; regenerate with Tools/Setup-Local.ps1.
+/Assets/UOSLauncherEncrypt/EncryptKey.cs
+/Assets/UOSLauncherEncrypt/EncryptKey.cs.meta
+/Assets/Resources/UOSSettings.asset
+/Assets/Resources/UOSSettings.asset.meta
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
