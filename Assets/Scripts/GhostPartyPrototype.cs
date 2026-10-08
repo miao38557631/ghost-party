@@ -18,21 +18,76 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     public enum PrankStage { CurtainSequence, Complete, Escaped }
     public enum Language { Chinese, English }
     public enum Difficulty { Normal, Easy }
-    enum CurtainAction { Tap, AutoLift, AutoApproach, DragRight, DragDown, SwipeLeft, SwipeRight, WindLeft, ThrowRightRelease }
+    enum CurtainAction { Tap, AutoLift, AutoApproach, AutoWrapComplete, DragRight, DragDown, SwipeLeft, SwipeRight, WindLeft, Hold, ThrowRightRelease }
 
-    // This is the playable version of the Curtain section in the proposal.  The
-    // sequence lives as data rather than in a chain of stage-specific methods,
-    // so changing a beat later is a one-line edit here instead of a logic rewrite.
-    static readonly CurtainAction[] CurtainPlan =
+    [Serializable]
+    sealed class CurtainStepConfig
     {
-        CurtainAction.Tap, CurtainAction.Tap,
-        CurtainAction.AutoLift, CurtainAction.AutoApproach,
-        CurtainAction.DragRight, CurtainAction.DragDown,
-        CurtainAction.SwipeLeft, CurtainAction.SwipeRight, CurtainAction.SwipeLeft, CurtainAction.SwipeRight,
-        CurtainAction.SwipeLeft, CurtainAction.SwipeRight, CurtainAction.SwipeLeft, CurtainAction.SwipeRight,
-        CurtainAction.SwipeLeft, CurtainAction.SwipeRight, CurtainAction.SwipeLeft, CurtainAction.SwipeRight,
-        CurtainAction.WindLeft, CurtainAction.ThrowRightRelease
-    };
+        public CurtainAction action;
+        [Min(1)] public int durationBeats = 1;
+
+        public CurtainStepConfig(CurtainAction action, int durationBeats = 1)
+        {
+            this.action = action;
+            this.durationBeats = Mathf.Max(1, durationBeats);
+        }
+    }
+
+    // The curtain sequence is data: operation, direction, and occupied beats
+    // are kept together so timing, cue icons and performance can be changed in
+    // one place. The 19 beat timeline is 18 entries because AutoApproach owns
+    // beats 4-5.
+    [SerializeField] List<CurtainStepConfig> curtainPlan = BuildDefaultCurtainPlan();
+
+    static List<CurtainStepConfig> BuildDefaultCurtainPlan()
+    {
+        return new List<CurtainStepConfig>
+        {
+            new CurtainStepConfig(CurtainAction.Tap),
+            new CurtainStepConfig(CurtainAction.Tap),
+            new CurtainStepConfig(CurtainAction.AutoLift),
+            new CurtainStepConfig(CurtainAction.AutoApproach, 2),
+            new CurtainStepConfig(CurtainAction.DragRight),
+            new CurtainStepConfig(CurtainAction.DragDown),
+            new CurtainStepConfig(CurtainAction.AutoWrapComplete),
+            new CurtainStepConfig(CurtainAction.SwipeLeft),
+            new CurtainStepConfig(CurtainAction.SwipeRight),
+            new CurtainStepConfig(CurtainAction.SwipeLeft),
+            new CurtainStepConfig(CurtainAction.SwipeRight),
+            new CurtainStepConfig(CurtainAction.SwipeLeft),
+            new CurtainStepConfig(CurtainAction.SwipeRight),
+            new CurtainStepConfig(CurtainAction.SwipeLeft),
+            new CurtainStepConfig(CurtainAction.SwipeRight),
+            new CurtainStepConfig(CurtainAction.WindLeft),
+            new CurtainStepConfig(CurtainAction.Hold),
+            new CurtainStepConfig(CurtainAction.ThrowRightRelease)
+        };
+    }
+
+    int PlanCount { get { return curtainPlan == null ? 0 : curtainPlan.Count; } }
+    CurtainAction PlanAction(int index) { return curtainPlan[index].action; }
+    int PlanDuration(int index) { return Mathf.Max(1, curtainPlan[index].durationBeats); }
+    int CurrentPlanBeatNumber()
+    {
+        int beat = 1;
+        for (int i = 0; i < curtainStep && i < PlanCount; i++) beat += PlanDuration(i);
+        return Mathf.Min(beat, TotalPlanBeats);
+    }
+    int TotalPlanBeats
+    {
+        get
+        {
+            int total = 0;
+            for (int i = 0; i < PlanCount; i++) total += PlanDuration(i);
+            return Mathf.Max(1, total);
+        }
+    }
+    int CurrentStepDuration { get { return curtainStep < PlanCount ? PlanDuration(curtainStep) : 1; } }
+    CurtainAction CurrentAction { get { return curtainStep < PlanCount ? PlanAction(curtainStep) : CurtainAction.Tap; } }
+    bool IsAutomaticAction(CurtainAction action)
+    {
+        return action == CurtainAction.AutoLift || action == CurtainAction.AutoApproach || action == CurtainAction.AutoWrapComplete;
+    }
 
     [Serializable]
     public class HudLayoutSettings
@@ -76,6 +131,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [SerializeField, Range(0.05f, 1f)] float bgmVolume = 0.34f;
     [SerializeField, Range(0.08f, 0.40f)] float beatTolerance = 0.30f;
     [SerializeField, Range(0.30f, 0.49f)] float easyBeatTolerance = 0.42f;
+    [SerializeField, Min(1)] int normalMissesPerEscapeSegment = 2;
+    [SerializeField, Min(1)] int easyMissesPerEscapeSegment = 3;
     [SerializeField, Range(-0.15f, 0.15f)] float rhythmCalibrationSeconds = 0f;
     [SerializeField, Range(0.5f, 2f)] float firstInputLeadBeats = 1f;
     [SerializeField, Range(0.02f, 0.20f)] float curtainGestureThreshold = 0.04f;
@@ -200,6 +257,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (instance != null && instance != this) { Destroy(gameObject); return; }
         instance = this;
         Application.targetFrameRate = 120;
+        if (curtainPlan == null || curtainPlan.Count == 0) curtainPlan = BuildDefaultCurtainPlan();
         BuildWorld();
         BuildAudio();
         BuildHud();
@@ -265,7 +323,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             frame = Time.frameCount, time = Time.unscaledTime,
             frameMs = Time.unscaledDeltaTime * 1000f, scaledMs = Time.deltaTime * 1000f,
-            step = curtainStep, action = stage == PrankStage.CurtainSequence && curtainStep < CurtainPlan.Length ? (int)CurtainPlan[curtainStep] : -1,
+            step = curtainStep, action = stage == PrankStage.CurtainSequence && curtainStep < PlanCount ? (int)PlanAction(curtainStep) : -1,
             closeup = mode == Mode.Closeup, events = motionEvents, held = curtainHeld, armed = gestureArmed,
             beat = beatClock == null ? 0.0 : beatClock.BeatIndex, target = curtainTargetBeat,
             mouse = mouse, mouseDelta = diagnosticMouseInitialized ? mouse - previousDiagnosticMouse : Vector3.zero,
@@ -646,15 +704,15 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     bool RegisterEmptyBeat()
     {
-        if (stage != PrankStage.CurtainSequence || curtainStep >= CurtainPlan.Length) return true;
-        CurtainAction action = CurtainPlan[curtainStep];
-        if (action == CurtainAction.AutoLift || action == CurtainAction.AutoApproach) return true;
+        if (stage != PrankStage.CurtainSequence || curtainStep >= PlanCount) return true;
+        CurtainAction action = PlanAction(curtainStep);
+        if (IsAutomaticAction(action)) return true;
         if (lastEscapeCountedBeat == curtainTargetBeat) return true;
         lastEscapeCountedBeat = curtainTargetBeat;
         // Account for whole empty beat windows skipped by an unusually long frame.
         int missed = 1 + Math.Max(0, (int)Math.Floor(beatClock.BeatIndex - curtainTargetBeat - BeatTolerance));
-        consecutiveEmptyBeats = Math.Min(8, consecutiveEmptyBeats + missed);
-        escapeProgress = consecutiveEmptyBeats / 2;
+        consecutiveEmptyBeats = Math.Min(MissesPerEscapeSegment * 4, consecutiveEmptyBeats + missed);
+        escapeProgress = consecutiveEmptyBeats / MissesPerEscapeSegment;
         if (escapeGaugeText != null) escapeGaugeText.text = escapeProgress + "/4";
         if (escapeProgress < 4) return true;
         EscapeCurtain();
@@ -691,15 +749,16 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             visible = Vector2.Distance(ghostFloor, curtainFloor) < interactionRange;
             icon = "E";
         }
-        else if (mode == Mode.Closeup && stage == PrankStage.CurtainSequence && curtainStep < CurtainPlan.Length)
+        else if (mode == Mode.Closeup && stage == PrankStage.CurtainSequence && curtainStep < PlanCount)
         {
             visible = true;
-            icon = CueIcon(CurtainPlan[curtainStep]);
+            icon = CueIcon(PlanAction(curtainStep));
         }
 
         if (worldCueCanvas.gameObject.activeSelf != visible) worldCueCanvas.gameObject.SetActive(visible);
         bool nextVisible = visible && mode == Mode.Closeup && stage == PrankStage.CurtainSequence
-            && curtainStep + 1 < CurtainPlan.Length;
+            && curtainStep < PlanCount && !IsAutomaticAction(PlanAction(curtainStep))
+            && curtainStep + 1 < PlanCount && !IsAutomaticAction(PlanAction(curtainStep + 1));
         if (nextWorldCueCanvas != null && nextWorldCueCanvas.gameObject.activeSelf != nextVisible)
             nextWorldCueCanvas.gameObject.SetActive(nextVisible);
         if (!visible) return;
@@ -724,7 +783,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 - cam.transform.right * 0.62f - cam.transform.up * 0.55f;
             nextWorldCueCanvas.transform.rotation = worldCueCanvas.transform.rotation;
             nextWorldCueCanvas.transform.localScale = Vector3.one * 0.0042f;
-            string nextIcon = CueIcon(CurtainPlan[curtainStep + 1]);
+            string nextIcon = CueIcon(PlanAction(curtainStep + 1));
             if (nextWorldCueText.text != nextIcon) nextWorldCueText.text = nextIcon;
         }
     }
@@ -800,11 +859,25 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void HandleCurtainSequence()
     {
-        if (curtainStep >= CurtainPlan.Length) { CompletePrank(); return; }
-        CurtainAction action = CurtainPlan[curtainStep];
+        if (curtainStep >= PlanCount) { CompletePrank(); return; }
+        CurtainAction action = PlanAction(curtainStep);
         UpdateCurtainCue(action);
 
-        if (action == CurtainAction.AutoLift || action == CurtainAction.AutoApproach)
+        if (action == CurtainAction.Hold)
+        {
+            // Hold is a real one-beat manual step. It inherits the press from
+            // the successful lower-left wind-up and must remain held until the
+            // next target beat; releasing starts the wind-up step over.
+            if (!curtainHeld || Input.GetMouseButtonUp(0) || !Input.GetMouseButton(0))
+            {
+                FailHoldAndRestartWind();
+                return;
+            }
+            if (beatClock.BeatIndex >= curtainTargetBeat) TryCurtainAction(true);
+            return;
+        }
+
+        if (IsAutomaticAction(action))
         {
             // Taps have already been released by the time the automatic beats run.
             // Do not let that earlier click count as the later drag's held state.
@@ -812,8 +885,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             gestureArmed = false;
             if (action == CurtainAction.AutoApproach)
             {
+                double approachStart = curtainTargetBeat - PlanDuration(curtainStep);
                 float approach = Mathf.SmoothStep(0f, 1f,
-                    Mathf.Clamp01((float)(beatClock.BeatIndex - (curtainTargetBeat - 1.0))));
+                    Mathf.Clamp01((float)((beatClock.BeatIndex - approachStart) / PlanDuration(curtainStep))));
                 guest.position = Vector3.Lerp(guestHome, curtainGuestSpot, approach);
                 if (guestHead != null) guestHead.position = guest.position + new Vector3(0f, 0.88f, 0f);
             }
@@ -904,6 +978,19 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         }
     }
 
+    void FailHoldAndRestartWind()
+    {
+        TriggerCameraFailure();
+        int windStep = curtainStep > 0 && PlanAction(curtainStep - 1) == CurtainAction.WindLeft
+            ? curtainStep - 1 : curtainStep;
+        curtainStep = windStep;
+        curtainTargetBeat = Math.Floor(beatClock.BeatIndex) + 1.0;
+        ResetGestureState();
+        retryMessage = T("蓄力中断，从左下重新开始。", "Wind-up interrupted; restart from lower-left.");
+        ShowFeedback(T("蓄力失败 · 下一拍重来", "WIND-UP FAILED · Restart next beat"), new Color(1f, 0.45f, 0.35f));
+        UpdateCurtainCue(PlanAction(curtainStep));
+    }
+
     void TryCurtainAction(bool keepHolding = false)
     {
         double delta = beatClock.BeatIndex - curtainTargetBeat;
@@ -913,7 +1000,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             motionEvents |= (int)MotionEvent.Success;
             retryMessage = "";
             ShowFeedback(T("卡点！", "ON BEAT!"), new Color(1f, 0.84f, 0.3f));
-            lastPerformedAction = CurtainPlan[curtainStep];
+            lastPerformedAction = PlanAction(curtainStep);
             actionImpactUntil = Time.time + 0.24f;
             TriggerCameraImpact(lastPerformedAction);
             if (keepHolding)
@@ -978,18 +1065,19 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void AdvanceCurtainStep()
     {
+        int completedDuration = curtainStep < PlanCount ? PlanDuration(curtainStep) : 1;
         curtainStep++;
-        if (curtainStep >= CurtainPlan.Length)
+        if (curtainStep >= PlanCount)
         {
             CompletePrank();
             UpdateStageHud();
             return;
         }
-        curtainTargetBeat += 1.0;
+        curtainTargetBeat += completedDuration;
         // Publish the next operation before the next rendered frame. The
         // previous successful animation can finish independently of the cue.
         UpdateStageHud();
-        UpdateCurtainCue(CurtainPlan[curtainStep]);
+        UpdateCurtainCue(PlanAction(curtainStep));
     }
 
     void CompletePrank()
@@ -1062,9 +1150,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (mode != Mode.Closeup) return;
         if (Input.GetKeyDown(KeyCode.R)) ResetPrank();
-        if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 0; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F3)) { curtainStep = 4; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F4)) { curtainStep = 19; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 4; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F3)) { curtainStep = 7; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F4)) { curtainStep = 15; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
     }
 
     void UpdatePrankVisuals()
@@ -1075,9 +1163,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         curtain.rotation = Quaternion.identity;
         curtain.localScale = curtainScaleHome;
 
-        if (stage == PrankStage.CurtainSequence && curtainStep < CurtainPlan.Length)
+        if (stage == PrankStage.CurtainSequence && curtainStep < PlanCount)
         {
-            CurtainAction action = CurtainPlan[curtainStep];
+            CurtainAction action = PlanAction(curtainStep);
             if (Time.time < actionImpactUntil) action = lastPerformedAction;
             // Manual actions use their own full rise-and-fall curve, ending at
             // rest exactly when the impact window closes. Tying this pose to
@@ -1085,7 +1173,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             float impactProgress = Mathf.Clamp01((Time.time - (actionImpactUntil - 0.24f)) / 0.24f);
             float impactArc = ActionEnvelope(impactProgress);
             float hit = Time.time < actionImpactUntil ? impactArc : 0f;
-            float stepProgress = Mathf.Clamp01((float)(beatClock.BeatIndex - (curtainTargetBeat - 1.0)));
+            double stepStartBeat = curtainTargetBeat - CurrentStepDuration;
+            float stepProgress = Mathf.Clamp01((float)((beatClock.BeatIndex - stepStartBeat) / CurrentStepDuration));
             // Leave room for the preceding tap's animation before lifting.
             float pull = action == CurtainAction.AutoLift
                 ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.45f, 1f, stepProgress)) : hit;
@@ -1098,9 +1187,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             // actually reaches the curtain. Other steps pose around that spot.
             if (action != CurtainAction.AutoApproach) guest.position = guestBase;
 
-            bool automatic = action == CurtainAction.AutoLift || action == CurtainAction.AutoApproach;
+            bool automatic = IsAutomaticAction(action);
             bool confirmed = Time.time < actionImpactUntil;
-            if (automatic || confirmed) switch (action)
+            if (automatic || confirmed || action == CurtainAction.Hold) switch (action)
             {
                 case CurtainAction.Tap:
                     curtain.position += new Vector3(Mathf.Sin(closeupPulse * 18f) * 0.10f * hit, 0f, 0f);
@@ -1117,6 +1206,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                     curtain.rotation = Quaternion.Euler(0f, 0f, -11f * liftReturn);
                     curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1f, 1f - 0.10f * liftReturn, 1f));
                     guestTilt = Mathf.Sin(closeupPulse * 9f) * 4f * ActionEnvelope(stepProgress);
+                    break;
+                case CurtainAction.AutoWrapComplete:
+                    curtain.position += new Vector3(-0.48f, -0.16f, 0f);
+                    curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1.12f, 0.94f, 1f));
+                    guestScale = 0.90f;
+                    guestTilt = Mathf.Sin(closeupPulse * 8f) * 3f;
                     break;
                 case CurtainAction.DragRight:
                     curtain.position += new Vector3(-0.48f * pull, 0.04f * pull, 0f);
@@ -1142,6 +1237,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                     curtain.rotation = Quaternion.Euler(0f, 0f, -15f * pull);
                     guestOffset = new Vector3(-0.20f * pull, -0.07f * pull, 0f);
                     guestTilt = -10f * pull;
+                    break;
+                case CurtainAction.Hold:
+                    curtain.position += new Vector3(-0.50f, -0.18f, 0f);
+                    curtain.rotation = Quaternion.Euler(0f, 0f, -15f);
+                    guestOffset = new Vector3(-0.20f, -0.07f, 0f);
+                    guestTilt = -10f + Mathf.Sin(closeupPulse * 5f) * 2f;
                     break;
                 case CurtainAction.ThrowRightRelease:
                     curtain.position += new Vector3(0.40f * pull, 0.10f * pull, 0f);
@@ -1214,7 +1315,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             case PrankStage.CurtainSequence:
                 title.text = T("窗帘恶作剧 · 节拍操作", "Curtain Prank · Beat Actions");
                 actionHint.text = T("所有手动操作都要落在亮拍；拖拽与挥打保持按住左键", "Manual actions land on the bright beat; hold left mouse through drags and swipes");
-                progressText.text = T("流程进度　", "Progress　") + Mathf.Min(curtainStep + 1, CurtainPlan.Length) + "/" + CurtainPlan.Length;
+                progressText.text = T("流程拍位　", "Beat progress　") + CurrentPlanBeatNumber() + "/" + TotalPlanBeats;
                 break;
             case PrankStage.Complete:
                 title.text = T("窗帘恶作剧 · 完成", "Curtain Prank · Complete");
@@ -1223,7 +1324,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 break;
             case PrankStage.Escaped:
                 title.text = T("窗帘恶作剧 · 挣脱", "Curtain Prank · Escape");
-                actionHint.text = T("每漏两拍涨一格，连续漏八拍后挣脱", "One segment per two empty beats; eight consecutive misses break the restraint");
+                actionHint.text = T($"每漏{MissesPerEscapeSegment}拍涨一格，连续漏{MissesPerEscapeSegment * 4}拍后挣脱", $"One segment per {MissesPerEscapeSegment} empty beats; {MissesPerEscapeSegment * 4} consecutive misses break the restraint");
                 progressText.text = T("挣脱进度　4/4", "Escape progress　4/4");
                 prompt.text = T("客人挣脱了，可以重新开始恶作剧", "The guest broke free; try the prank again");
                 status.text = T("返回探索视角……", "Returning to exploration…");
@@ -1248,16 +1349,18 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 case CurtainAction.Tap: icon = T("点", "L"); instruction = T("单击窗帘", "CLICK THE CURTAIN"); break;
                 case CurtainAction.AutoLift: icon = ""; instruction = T("窗帘自己抬起……", "THE CURTAIN LIFTS…"); break;
                 case CurtainAction.AutoApproach: icon = ""; instruction = T("客人走向窗帘……", "THE GUEST APPROACHES…"); break;
+                case CurtainAction.AutoWrapComplete: icon = ""; instruction = T("包裹完成……", "WRAP COMPLETE…"); break;
                 case CurtainAction.DragRight: icon = "→"; instruction = T("按住左键向右拉", "HOLD + DRAG RIGHT"); break;
                 case CurtainAction.DragDown: icon = "↓"; instruction = T("保持按住，向下拉紧", "KEEP HOLDING + DRAG DOWN"); break;
                 case CurtainAction.SwipeLeft: icon = "←"; instruction = T("按住左键向左挥", "HOLD + SWIPE LEFT"); break;
                 case CurtainAction.SwipeRight: icon = "→"; instruction = T("保持按住向右挥", "KEEP HOLDING + SWIPE RIGHT"); break;
                 case CurtainAction.WindLeft: icon = "↙"; instruction = T("保持按住，向左下蓄力", "KEEP HOLDING + WIND LOWER-LEFT"); break;
+                case CurtainAction.Hold: icon = "-"; instruction = T("保持按住，维持蓄力", "KEEP HOLDING THE WIND-UP"); break;
                 default: icon = "↗"; instruction = T("保持按住，向右上甩出后松开", "KEEP HOLDING + SWIPE UPPER-RIGHT, THEN RELEASE"); break;
             }
             if (inputCueIcon != null) inputCueIcon.text = icon;
-            prompt.text = T($"第 {curtainStep + 1}/{CurtainPlan.Length} 拍　{instruction}",
-                            $"Beat {curtainStep + 1}/{CurtainPlan.Length}　{instruction}");
+            prompt.text = T($"第 {CurrentPlanBeatNumber()}/{TotalPlanBeats} 拍　{instruction}",
+                            $"Beat {CurrentPlanBeatNumber()}/{TotalPlanBeats}　{instruction}");
             renderedCueStep = curtainStep;
             renderedCueLanguage = language;
         }
@@ -1280,12 +1383,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             case CurtainAction.Tap: return T("点", "L");
             case CurtainAction.AutoLift:
-            case CurtainAction.AutoApproach: return "";
+            case CurtainAction.AutoApproach:
+            case CurtainAction.AutoWrapComplete: return "";
             case CurtainAction.DragRight: return "→";
             case CurtainAction.DragDown: return "↓";
             case CurtainAction.WindLeft: return "↙";
             case CurtainAction.SwipeLeft: return "←";
             case CurtainAction.SwipeRight: return "→";
+            case CurtainAction.Hold: return "-";
             default: return "↗";
         }
     }
@@ -1359,6 +1464,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     float BeatTolerance { get { return difficulty == Difficulty.Easy ? easyBeatTolerance : beatTolerance; } }
     float GestureThreshold { get { return difficulty == Difficulty.Easy ? easyGestureThreshold : curtainGestureThreshold; } }
+    int MissesPerEscapeSegment { get { return difficulty == Difficulty.Easy ? easyMissesPerEscapeSegment : normalMissesPerEscapeSegment; } }
 
     Button MakeLanguageButton()
     {
@@ -1556,8 +1662,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         gestureArmed = false;
         gestureStart = Input.mousePosition;
         cameraGestureStarted = false;
-        gestureRetryPending = stage == PrankStage.CurtainSequence && curtainStep < CurtainPlan.Length
-            && IsDirectionalAction(CurtainPlan[curtainStep]);
+        gestureRetryPending = stage == PrankStage.CurtainSequence && curtainStep < PlanCount
+            && IsDirectionalAction(PlanAction(curtainStep));
         gestureRetryReadyAt = Time.time + (hadCameraGesture ? 0.22f : 0f);
         if (!hadCameraGesture || cam == null) return;
         cameraReboundOffset = Quaternion.Inverse(cam.transform.rotation) * appliedCameraActionOffset;
