@@ -129,14 +129,15 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [SerializeField] float interactionRange = 2.0f;
     [SerializeField] float beatBpm = 112f;
     [SerializeField, Range(0.05f, 1f)] float bgmVolume = 0.34f;
-    [SerializeField, Range(0.08f, 0.40f)] float beatTolerance = 0.30f;
-    [SerializeField, Range(0.30f, 0.49f)] float easyBeatTolerance = 0.42f;
+    [SerializeField, Range(0.08f, 0.40f)] float beatTolerance = 0.34f;
+    [SerializeField, Range(0.30f, 0.49f)] float easyBeatTolerance = 0.46f;
     [SerializeField, Min(1)] int normalMissesPerEscapeSegment = 2;
     [SerializeField, Min(1)] int easyMissesPerEscapeSegment = 3;
     [SerializeField, Range(-0.15f, 0.15f)] float rhythmCalibrationSeconds = 0f;
     [SerializeField, Range(0.5f, 2f)] float firstInputLeadBeats = 1f;
-    [SerializeField, Range(0.02f, 0.20f)] float curtainGestureThreshold = 0.04f;
-    [SerializeField, Range(0.02f, 0.20f)] float easyGestureThreshold = 0.025f;
+    [SerializeField, Range(0.05f, 0.50f)] float gestureStartLeadBeats = 0.30f;
+    [SerializeField, Range(0.02f, 0.20f)] float curtainGestureThreshold = 0.035f;
+    [SerializeField, Range(0.02f, 0.20f)] float easyGestureThreshold = 0.022f;
 
     Mode mode = Mode.Explore;
     PrankStage stage = PrankStage.CurtainSequence;
@@ -179,6 +180,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     int curtainStep;
     bool curtainHeld;
     bool gestureArmed;
+    bool gestureStartCaptured;
     bool gestureRetryPending;
     float gestureRetryReadyAt;
     CurtainAction lastPerformedAction;
@@ -868,7 +870,15 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             // Hold is a real one-beat manual step. It inherits the press from
             // the successful lower-left wind-up and must remain held until the
             // next target beat; releasing starts the wind-up step over.
-            if (!curtainHeld || Input.GetMouseButtonUp(0) || !Input.GetMouseButton(0))
+            if (gestureRetryPending)
+            {
+                if (Time.time < gestureRetryReadyAt) return;
+                gestureRetryPending = false;
+                curtainTargetBeat = Math.Max(curtainTargetBeat, Math.Floor(beatClock.BeatIndex) + 1.0);
+            }
+            bool holdInput = curtainHeld && (Input.GetMouseButton(0) || Input.GetKey(KeyCode.Space) ||
+                Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.W));
+            if (!holdInput || Input.GetMouseButtonUp(0))
             {
                 FailHoldAndRestartWind();
                 return;
@@ -905,16 +915,26 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             gestureArmed = false;
             cameraGestureStarted = false;
         }
-        bool gestureInputReady = true;
         if (gestureRetryPending)
         {
-            // Discard the failed stroke, including motion during the rebound.
-            // Keep the mouse held, but measure the next attempt from a fresh origin.
-            gestureStart = Input.mousePosition;
+            // Recovery lasts one full beat. No movement during this interval is
+            // cached; after recovery, the retry beat and its 0.3-beat start
+            // sample are established fresh.
             gestureArmed = false;
-            gestureInputReady = false;
-            if (Time.time >= gestureRetryReadyAt) gestureRetryPending = false;
+            gestureStartCaptured = false;
+            if (Time.time < gestureRetryReadyAt) return;
+            gestureRetryPending = false;
+            curtainTargetBeat = Math.Max(curtainTargetBeat, Math.Floor(beatClock.BeatIndex) + 1.0);
         }
+        bool directional = IsDirectionalAction(action);
+        if (directional && !gestureStartCaptured &&
+            beatClock.BeatIndex >= curtainTargetBeat - gestureStartLeadBeats)
+        {
+            gestureStart = Input.mousePosition;
+            gestureStartCaptured = true;
+            gestureArmed = false;
+        }
+        bool gestureInputReady = !directional || gestureStartCaptured;
         Vector3 delta = Input.mousePosition - gestureStart;
         float xThreshold = GestureThreshold * Screen.width;
         float yThreshold = GestureThreshold * Screen.height;
@@ -925,6 +945,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         bool rightHeld = Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D);
         bool downHeld = Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S);
         bool upHeld = Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W);
+        bool keyboardHeld = leftHeld || rightHeld || downHeld || upHeld || Input.GetKey(KeyCode.Space);
+        if (IsDirectionalAction(action) && keyboardHeld) curtainHeld = true;
 
         // Visual response starts with the drag, independently of rhythm judgement.
         // A tiny pixel dead zone prevents a stationary click from starting a pan.
@@ -966,6 +988,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             if (cameraGestureStarted) TriggerCameraFailure();
             curtainHeld = false;
             gestureArmed = false;
+            gestureStartCaptured = false;
             cameraGestureStarted = false;
         }
         if (beatClock.BeatIndex > curtainTargetBeat + BeatTolerance)
@@ -986,6 +1009,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         curtainStep = windStep;
         curtainTargetBeat = Math.Floor(beatClock.BeatIndex) + 1.0;
         ResetGestureState();
+        gestureRetryPending = true;
+        gestureRetryReadyAt = Time.time + BeatDurationSeconds;
         retryMessage = T("蓄力中断，从左下重新开始。", "Wind-up interrupted; restart from lower-left.");
         ShowFeedback(T("蓄力失败 · 下一拍重来", "WIND-UP FAILED · Restart next beat"), new Color(1f, 0.45f, 0.35f));
         UpdateCurtainCue(PlanAction(curtainStep));
@@ -1005,6 +1030,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             TriggerCameraImpact(lastPerformedAction);
             if (keepHolding)
             {
+                gestureStartCaptured = false;
                 gestureStart = Input.mousePosition;
             }
             gestureArmed = false;
@@ -1065,7 +1091,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void AdvanceCurtainStep()
     {
-        int completedDuration = curtainStep < PlanCount ? PlanDuration(curtainStep) : 1;
         curtainStep++;
         if (curtainStep >= PlanCount)
         {
@@ -1073,7 +1098,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             UpdateStageHud();
             return;
         }
-        curtainTargetBeat += completedDuration;
+        // Target beat is the end of the next configured step. This keeps the
+        // two-beat approach ending on beat 5 instead of accidentally ending on 4.
+        curtainTargetBeat += PlanDuration(curtainStep);
         // Publish the next operation before the next rendered frame. The
         // previous successful animation can finish independently of the cue.
         UpdateStageHud();
@@ -1107,6 +1134,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         gestureStart = Vector3.zero;
         curtainHeld = false;
         gestureArmed = false;
+        gestureStartCaptured = false;
         gestureRetryPending = false;
         gestureRetryReadyAt = 0f;
         actionImpactUntil = -1f;
@@ -1369,7 +1397,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             string timingStatus = gestureArmed
                 ? T("已蓄好 · 保持按住等亮拍", "ARMED · HOLD FOR THE BRIGHT BEAT")
-                : T($"目标拍：{curtainTargetBeat + 1:0}　看亮拍操作", $"Target beat: {curtainTargetBeat + 1:0}　act on the bright beat");
+                : T($"目标拍：{curtainTargetBeat:0}　看亮拍操作", $"Target beat: {curtainTargetBeat:0}　act on the bright beat");
             status.text = (retryMessage.Length > 0 ? retryMessage + "　" : "") + timingStatus;
             renderedTargetBeat = curtainTargetBeat;
             renderedGestureArmed = gestureArmed;
@@ -1465,6 +1493,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     float BeatTolerance { get { return difficulty == Difficulty.Easy ? easyBeatTolerance : beatTolerance; } }
     float GestureThreshold { get { return difficulty == Difficulty.Easy ? easyGestureThreshold : curtainGestureThreshold; } }
     int MissesPerEscapeSegment { get { return difficulty == Difficulty.Easy ? easyMissesPerEscapeSegment : normalMissesPerEscapeSegment; } }
+    float BeatDurationSeconds { get { return 60f / Mathf.Max(1f, beatBpm); } }
 
     Button MakeLanguageButton()
     {
@@ -1613,7 +1642,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (mode != Mode.Closeup) return Vector3.zero;
         if (cameraReboundStartedAt >= 0f)
         {
-            float t = (Time.time - cameraReboundStartedAt) / 0.22f;
+            float t = (Time.time - cameraReboundStartedAt) / BeatDurationSeconds;
             if (t >= 1f)
             {
                 cameraPanVelocity = Vector3.zero;
@@ -1662,9 +1691,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         gestureArmed = false;
         gestureStart = Input.mousePosition;
         cameraGestureStarted = false;
-        gestureRetryPending = stage == PrankStage.CurtainSequence && curtainStep < PlanCount
+        bool directionalRetry = stage == PrankStage.CurtainSequence && curtainStep < PlanCount
             && IsDirectionalAction(PlanAction(curtainStep));
-        gestureRetryReadyAt = Time.time + (hadCameraGesture ? 0.22f : 0f);
+        gestureRetryPending = directionalRetry;
+        gestureRetryReadyAt = directionalRetry ? Time.time + BeatDurationSeconds : 0f;
         if (!hadCameraGesture || cam == null) return;
         cameraReboundOffset = Quaternion.Inverse(cam.transform.rotation) * appliedCameraActionOffset;
         cameraReboundStartedAt = Time.time;
