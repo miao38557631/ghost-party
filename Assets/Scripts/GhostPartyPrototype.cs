@@ -248,6 +248,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
+        // Level-only scenes are authored independently of the runtime prank prototype.
+        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().path.StartsWith("Assets/LevelWhitebox/", StringComparison.Ordinal)) return;
         if (FindObjectOfType<GhostPartyPrototype>() != null) return;
         var go = new GameObject("GhostPartyPrototype_Runtime");
         instance = go.AddComponent<GhostPartyPrototype>();
