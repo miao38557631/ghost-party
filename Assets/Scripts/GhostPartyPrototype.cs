@@ -156,6 +156,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Canvas escapeGaugeCanvas;
     Image escapeGaugeFill;
     Text escapeGaugeText;
+    RectTransform gestureGuideRoot;
+    CanvasGroup gestureGuideGroup;
+    Image gestureGuideLine;
+    Image gestureGuideStart;
+    Image gestureGuideTarget;
+    Text gestureGuideArrow;
+    Text gestureGuideStartText;
+    Text gestureGuideTargetText;
     int escapeProgress;
     int consecutiveEmptyBeats;
     [SerializeField] float escapeZoomPerSegment = 0.12f;
@@ -307,6 +315,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         UpdateCamera();
         cameraCpuMs = ElapsedDiagnosticMs(diagnosticStart);
         UpdateWorldCue();
+        UpdateGestureGuide();
         UpdateEscapeGauge();
         SampleMotionDiagnostics();
     }
@@ -572,6 +581,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         prompt = MakeText("Prompt", hudLayout.promptAnchor, hudLayout.promptSize, hudLayout.promptFontSize, TextAnchor.MiddleLeft, Color.white);
         inputCueIcon = MakeText("InputCueIcon", new Vector2(0.36f, hudLayout.promptAnchor.y), new Vector2(0.055f, 0.075f), 23, TextAnchor.MiddleCenter, new Color(1f, 0.86f, 0.46f));
         BuildWorldCue();
+        BuildGestureGuide();
         BuildEscapeGauge();
         status = MakeText("Status", hudLayout.statusAnchor, hudLayout.statusSize, hudLayout.statusFontSize, TextAnchor.UpperLeft, new Color(0.72f, 0.85f, 0.92f));
         feedback = MakeText("Feedback", hudLayout.feedbackAnchor, hudLayout.feedbackSize, hudLayout.feedbackFontSize, TextAnchor.MiddleLeft, Color.white);
@@ -637,6 +647,63 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         nextGroup.blocksRaycasts = false;
         next.SetActive(false);
         go.SetActive(false);
+    }
+
+    void BuildGestureGuide()
+    {
+        var go = new GameObject("GestureDragGuide");
+        go.transform.SetParent(canvas.transform, false);
+        gestureGuideRoot = go.AddComponent<RectTransform>();
+        gestureGuideRoot.anchorMin = Vector2.zero;
+        gestureGuideRoot.anchorMax = Vector2.one;
+        gestureGuideRoot.offsetMin = gestureGuideRoot.offsetMax = Vector2.zero;
+        gestureGuideRoot.pivot = new Vector2(0.5f, 0.5f);
+        gestureGuideGroup = go.AddComponent<CanvasGroup>();
+        gestureGuideGroup.interactable = false;
+        gestureGuideGroup.blocksRaycasts = false;
+
+        gestureGuideLine = MakeGestureGuideImage("Path", CreateCircleSprite(), new Color(1f, 0.24f, 0.38f, 0.92f));
+        gestureGuideStart = MakeGestureGuideImage("Start", CreateRingSprite(), new Color(1f, 0.55f, 0.66f, 0.98f));
+        gestureGuideTarget = MakeGestureGuideImage("Target", CreateRingSprite(), new Color(1f, 0.92f, 0.42f, 1f));
+        gestureGuideArrow = MakeGestureGuideText("Arrow", 34, Color.white);
+        gestureGuideStartText = MakeGestureGuideText("StartLabel", 15, new Color(1f, 0.72f, 0.78f, 1f));
+        gestureGuideTargetText = MakeGestureGuideText("TargetLabel", 16, new Color(1f, 0.92f, 0.42f, 1f));
+        gestureGuideStartText.text = T("从这里", "START");
+        gestureGuideTargetText.text = T("拖到这里", "DRAG TO");
+        go.SetActive(false);
+    }
+
+    Image MakeGestureGuideImage(string name, Sprite sprite, Color color)
+    {
+        var child = new GameObject(name);
+        child.transform.SetParent(gestureGuideRoot, false);
+        var rect = child.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.sizeDelta = new Vector2(76f, 76f);
+        var image = child.AddComponent<Image>();
+        image.sprite = sprite;
+        image.color = color;
+        image.raycastTarget = false;
+        return image;
+    }
+
+    Text MakeGestureGuideText(string name, int fontSize, Color color)
+    {
+        var child = new GameObject(name);
+        child.transform.SetParent(gestureGuideRoot, false);
+        var rect = child.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.sizeDelta = new Vector2(160f, 38f);
+        var text = child.AddComponent<Text>();
+        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.fontSize = fontSize;
+        text.fontStyle = FontStyle.Bold;
+        text.alignment = TextAnchor.MiddleCenter;
+        text.color = color;
+        text.raycastTarget = false;
+        return text;
     }
 
     void BuildEscapeGauge()
@@ -759,6 +826,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             icon = CueIcon(PlanAction(curtainStep));
         }
 
+        // Directional actions already have a dedicated screen-space path. The
+        // world badge would sit on top of that path and make the gesture look
+        // like several competing targets, so keep it for taps and exploration.
+        bool directionalCurrent = mode == Mode.Closeup && stage == PrankStage.CurtainSequence
+            && curtainStep < PlanCount && IsDirectionalAction(PlanAction(curtainStep));
+        if (directionalCurrent) visible = false;
+
         if (worldCueCanvas.gameObject.activeSelf != visible) worldCueCanvas.gameObject.SetActive(visible);
         bool nextVisible = visible && mode == Mode.Closeup && stage == PrankStage.CurtainSequence
             && curtainStep < PlanCount && !IsAutomaticAction(PlanAction(curtainStep))
@@ -789,6 +863,146 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             nextWorldCueCanvas.transform.localScale = Vector3.one * 0.0042f;
             string nextIcon = CueIcon(PlanAction(curtainStep + 1));
             if (nextWorldCueText.text != nextIcon) nextWorldCueText.text = nextIcon;
+        }
+    }
+
+    void UpdateGestureGuide()
+    {
+        if (gestureGuideRoot == null) return;
+        bool visible = mode == Mode.Closeup && stage == PrankStage.CurtainSequence
+            && curtainStep < PlanCount && IsDirectionalAction(PlanAction(curtainStep));
+        if (gestureGuideRoot.gameObject.activeSelf != visible) gestureGuideRoot.gameObject.SetActive(visible);
+        if (!visible) return;
+
+        CurtainAction action = PlanAction(curtainStep);
+        Vector2 desiredDelta = GestureGuideDelta(action);
+        float screenWidth = Mathf.Max(1f, Screen.width);
+        float screenHeight = Mathf.Max(1f, Screen.height);
+        Vector2 startAnchor = GestureGuideAnchor(action);
+
+        // Once the player presses, turn the preview into a measurement guide for
+        // that exact press. This makes the target concrete without changing the
+        // existing input judgement, which still reads gestureStart and delta.
+        bool hasLiveStart = curtainHeld && gestureStart != Vector3.zero;
+        if (hasLiveStart)
+            startAnchor = new Vector2(gestureStart.x / screenWidth, gestureStart.y / screenHeight);
+
+        Vector2 targetAnchor = startAnchor + new Vector2(
+            desiredDelta.x / screenWidth, desiredDelta.y / screenHeight);
+        targetAnchor.x = Mathf.Clamp(targetAnchor.x, 0.08f, 0.92f);
+        targetAnchor.y = Mathf.Clamp(targetAnchor.y, 0.12f, 0.88f);
+        startAnchor.x = Mathf.Clamp(startAnchor.x, 0.08f, 0.92f);
+        startAnchor.y = Mathf.Clamp(startAnchor.y, 0.12f, 0.88f);
+
+        Rect rootRect = gestureGuideRoot.rect;
+        float width = Mathf.Max(1f, rootRect.width);
+        float height = Mathf.Max(1f, rootRect.height);
+        Vector2 start = new Vector2((startAnchor.x - 0.5f) * width, (startAnchor.y - 0.5f) * height);
+        Vector2 target = new Vector2((targetAnchor.x - 0.5f) * width, (targetAnchor.y - 0.5f) * height);
+        Vector2 delta = target - start;
+        float distance = delta.magnitude;
+        if (distance < 1f) return;
+
+        RectTransform startRect = gestureGuideStart.rectTransform;
+        RectTransform targetRect = gestureGuideTarget.rectTransform;
+        startRect.anchoredPosition = start;
+        targetRect.anchoredPosition = target;
+        startRect.sizeDelta = new Vector2(58f, 58f);
+        targetRect.sizeDelta = new Vector2(84f, 84f);
+
+        RectTransform lineRect = gestureGuideLine.rectTransform;
+        lineRect.pivot = new Vector2(0f, 0.5f);
+        lineRect.anchoredPosition = start;
+        lineRect.sizeDelta = new Vector2(distance, 8f);
+        lineRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg);
+
+        RectTransform arrowRect = gestureGuideArrow.rectTransform;
+        arrowRect.anchoredPosition = target - delta.normalized * 52f;
+        // The glyph already encodes the action direction (down, diagonal, or
+        // horizontal), so rotating it again would point it somewhere else.
+        arrowRect.localRotation = Quaternion.identity;
+        gestureGuideArrow.text = GestureGuideArrow(action);
+        arrowRect.sizeDelta = new Vector2(44f, 44f);
+        gestureGuideStartText.text = T("左键按住", "HOLD LMB");
+        gestureGuideTargetText.text = action == CurtainAction.ThrowRightRelease
+            ? T("到这里松开", "RELEASE HERE") : T("拖到这里", "DRAG TO");
+        // Keep labels close to their rings, while leaving the arrow corridor
+        // clear so the eye reads the path from left to right.
+        gestureGuideStartText.rectTransform.sizeDelta = new Vector2(112f, 30f);
+        gestureGuideTargetText.rectTransform.sizeDelta = new Vector2(184f, 34f);
+        gestureGuideStartText.rectTransform.anchoredPosition = start - Vector2.up * 48f;
+        gestureGuideTargetText.rectTransform.anchoredPosition = target + Vector2.up * 56f;
+
+        bool armed = gestureArmed;
+        Color lineColor = armed ? new Color(0.30f, 1f, 0.58f, 0.96f) : new Color(1f, 0.24f, 0.38f, 0.92f);
+        Color targetColor = armed ? new Color(0.40f, 1f, 0.58f, 1f) : new Color(1f, 0.92f, 0.42f, 1f);
+        gestureGuideLine.color = lineColor;
+        gestureGuideStart.color = armed ? new Color(0.52f, 1f, 0.70f, 1f) : new Color(1f, 0.55f, 0.66f, 0.98f);
+        gestureGuideTarget.color = targetColor;
+        float phase = beatClock == null ? 0f : Mathf.Repeat((float)beatClock.BeatIndex, 1f);
+        float pulse = 0.84f + 0.16f * Mathf.Sin((phase * Mathf.PI * 2f) + Mathf.PI * 0.5f);
+        gestureGuideGroup.alpha = armed ? 1f : pulse;
+        gestureGuideRoot.localScale = Vector3.one * (armed ? 1.06f : 1f);
+    }
+
+    static Vector2 GestureGuideDirection(CurtainAction action)
+    {
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return Vector2.right;
+            case CurtainAction.DragDown: return Vector2.down;
+            case CurtainAction.SwipeLeft: return Vector2.left;
+            case CurtainAction.WindLeft: return new Vector2(-1f, -1f).normalized;
+            case CurtainAction.ThrowRightRelease: return new Vector2(1f, 1f).normalized;
+            default: return Vector2.right;
+        }
+    }
+
+    Vector2 GestureGuideDelta(CurtainAction action)
+    {
+        // The gameplay threshold is intentionally small so the interaction is
+        // forgiving. The visual example needs more separation to communicate
+        // a clear A-to-B motion at a glance.
+        float x = Mathf.Max(170f, GestureThreshold * Screen.width * 2.35f);
+        float y = Mathf.Max(130f, GestureThreshold * Screen.height * 2.15f);
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return new Vector2(x, 0f);
+            case CurtainAction.DragDown: return new Vector2(0f, -y);
+            case CurtainAction.SwipeLeft: return new Vector2(-x, 0f);
+            case CurtainAction.WindLeft: return new Vector2(-x, -y);
+            case CurtainAction.ThrowRightRelease: return new Vector2(x, y);
+            default: return GestureGuideDirection(action) * x;
+        }
+    }
+
+    static Vector2 GestureGuideAnchor(CurtainAction action)
+    {
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return new Vector2(0.22f, 0.30f);
+            case CurtainAction.DragDown: return new Vector2(0.25f, 0.56f);
+            case CurtainAction.SwipeLeft: return new Vector2(0.62f, 0.30f);
+            case CurtainAction.WindLeft: return new Vector2(0.62f, 0.52f);
+            case CurtainAction.ThrowRightRelease: return new Vector2(0.22f, 0.44f);
+            default: return new Vector2(0.25f, 0.34f);
+        }
+    }
+
+    static string GestureGuideArrow(CurtainAction action)
+    {
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return "→";
+            case CurtainAction.DragDown: return "↓";
+            case CurtainAction.SwipeLeft: return "←";
+            case CurtainAction.WindLeft: return "↙";
+            case CurtainAction.ThrowRightRelease: return "↗";
+            default: return "→";
         }
     }
 
@@ -1344,7 +1558,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             case PrankStage.CurtainSequence:
                 title.text = T("窗帘恶作剧 · 节拍操作", "Curtain Prank · Beat Actions");
-                actionHint.text = T("所有手动操作都要落在亮拍；拖拽与挥打保持按住左键", "Manual actions land on the bright beat; hold left mouse through drags and swipes");
+                actionHint.text = T("所有手动操作都要落在亮拍；按住左键，从红色起点圆拖到黄色目标圆", "Manual actions land on the bright beat; hold left mouse and drag from the red start ring to the yellow target ring");
                 progressText.text = T("流程拍位　", "Beat progress　") + CurrentPlanBeatNumber() + "/" + TotalPlanBeats;
                 break;
             case PrankStage.Complete:
@@ -1731,6 +1945,27 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             float rim = Mathf.Min(60f - radius, radius - 44f);
             float gap = Mathf.Min(Mathf.Abs(dx), Mathf.Abs(dy)) - 1.5f;
             float alpha = Mathf.SmoothStep(0f, 1f, Mathf.Min(rim, gap) / 1.5f);
+            pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
+        }
+        texture.SetPixels(pixels);
+        texture.Apply();
+        return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
+    // Ring marker used by the screen-space drag guide.
+    Sprite CreateRingSprite()
+    {
+        const int size = 128;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var pixels = new Color[size * size];
+        float center = (size - 1) * 0.5f;
+        float ringRadius = center - 5f;
+        for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+        {
+            float dx = x - center, dy = y - center;
+            float distance = Mathf.Sqrt(dx * dx + dy * dy);
+            float edge = 4.5f - Mathf.Abs(distance - ringRadius);
+            float alpha = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(edge / 1.5f));
             pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
         }
         texture.SetPixels(pixels);

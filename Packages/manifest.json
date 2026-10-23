@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.ibelongedtoyou.unity-mcp-2019": "file:UnityMcp2019",
     "cn.unity.uos.launcher": "https://cnb.cool/unity/uos/UOSLauncher.git",
     "com.unity.collab-proxy": "2.12.4",
     "com.unity.feature.development": "1.0.1",

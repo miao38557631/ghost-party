@@ -9,6 +9,23 @@
       },
       "hash": "76a5a7e54c24e8f428e43b5071892f60260beea2"
     },
+    "com.ibelongedtoyou.unity-mcp-2019": {
+      "version": "file:UnityMcp2019",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {
+        "com.unity.modules.animation": "1.0.0",
+        "com.unity.modules.audio": "1.0.0",
+        "com.unity.modules.imageconversion": "1.0.0",
+        "com.unity.modules.jsonserialize": "1.0.0",
+        "com.unity.modules.particlesystem": "1.0.0",
+        "com.unity.modules.physics": "1.0.0",
+        "com.unity.modules.physics2d": "1.0.0",
+        "com.unity.modules.screencapture": "1.0.0",
+        "com.unity.modules.uielements": "1.0.0",
+        "com.unity.test-framework": "1.1.24"
+      }
+    },
     "com.unity.collab-proxy": {
       "version": "2.12.4",
       "depth": 0,
