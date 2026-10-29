@@ -2,11 +2,14 @@ using UnityEngine;
 
 namespace GhostParty.LevelWhitebox
 {
-    // Inspection only. No gameplay, physics controller, audio or prototype dependencies.
+    // Preview controls plus per-level gameplay camera tuning.
     [RequireComponent(typeof(Camera))]
     public sealed class WhiteboxCamera : MonoBehaviour
     {
         public float speed = 8f;
+        [Header("Gameplay edge turn")]
+        [Range(0f, 90f)] public float leftTurnDegrees = 30f;
+        [Range(0f, 90f)] public float rightTurnDegrees = 30f;
         Vector3 overviewPosition;
         Quaternion overviewRotation;
         Camera view;

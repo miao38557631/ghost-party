@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
+using GhostParty.LevelWhitebox;
 
 /// <summary>
 /// First playable prototype for "别在这儿蹦跶": exploration -> curtain prank close-up -> guest exit.
@@ -35,8 +36,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     // The curtain sequence is data: operation, direction, and occupied beats
     // are kept together so timing, cue icons and performance can be changed in
-    // one place. The 19 beat timeline is 18 entries because AutoApproach owns
-    // beats 4-5.
+    // one place. The guest approach is an unmetered transition after two taps.
     [SerializeField] List<CurtainStepConfig> curtainPlan = BuildDefaultCurtainPlan();
 
     static List<CurtainStepConfig> BuildDefaultCurtainPlan()
@@ -45,8 +45,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             new CurtainStepConfig(CurtainAction.Tap),
             new CurtainStepConfig(CurtainAction.Tap),
-            new CurtainStepConfig(CurtainAction.AutoLift),
-            new CurtainStepConfig(CurtainAction.AutoApproach, 2),
+            new CurtainStepConfig(CurtainAction.AutoApproach),
             new CurtainStepConfig(CurtainAction.DragRight),
             new CurtainStepConfig(CurtainAction.DragDown),
             new CurtainStepConfig(CurtainAction.AutoWrapComplete),
@@ -66,7 +65,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     int PlanCount { get { return curtainPlan == null ? 0 : curtainPlan.Count; } }
     CurtainAction PlanAction(int index) { return curtainPlan[index].action; }
-    int PlanDuration(int index) { return Mathf.Max(1, curtainPlan[index].durationBeats); }
+    int PlanDuration(int index) { return PlanAction(index) == CurtainAction.AutoApproach ? 0 : Mathf.Max(1, curtainPlan[index].durationBeats); }
     int CurrentPlanBeatNumber()
     {
         int beat = 1;
@@ -82,7 +81,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             return Mathf.Max(1, total);
         }
     }
-    int CurrentStepDuration { get { return curtainStep < PlanCount ? PlanDuration(curtainStep) : 1; } }
+    int CurrentStepDuration { get { return curtainStep < PlanCount ? Mathf.Max(1, PlanDuration(curtainStep)) : 1; } }
     CurtainAction CurrentAction { get { return curtainStep < PlanCount ? PlanAction(curtainStep) : CurtainAction.Tap; } }
     bool IsAutomaticAction(CurtainAction action)
     {
@@ -142,6 +141,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Mode mode = Mode.Explore;
     PrankStage stage = PrankStage.CurtainSequence;
     Transform ghost, curtain, guest, guestHead;
+    PrankNpcActor guestActor;
     Camera cam;
     Canvas canvas;
     Text prompt, inputCueIcon, status, title, actionHint, progressText, feedback, languageButtonText, difficultyButtonText;
@@ -165,7 +165,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Text gestureGuideStartText;
     Text gestureGuideTargetText;
     int escapeProgress;
+    int displayedEscapeProgress;
     int consecutiveEmptyBeats;
+    long lastGaugeAccentCycle = long.MinValue;
     [SerializeField] float escapeZoomPerSegment = 0.12f;
     double lastEscapeCountedBeat = double.NaN;
     float feedbackUntil;
@@ -174,6 +176,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Vector3 exploreGhostPos = new Vector3(-4.6f, 0.38f, -1.5f);
     Vector3 guestHome = new Vector3(2.6f, 0.62f, 1.2f);
     Vector3 curtainHome;
+    Quaternion curtainRotationHome;
+    bool embeddedInLevel;
+    bool embeddedReady;
+    Vector3 embeddedGhostReturnPosition;
+    public event Action EmbeddedPrankFinished;
     Vector3 curtainScaleHome;
     Vector3 guestHeadHome;
     Vector3 guestHeadScaleHome;
@@ -194,6 +201,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     CurtainAction lastPerformedAction;
     float actionImpactUntil;
     Vector3 curtainGuestSpot = new Vector3(2.6f, 0.62f, 2.9f);
+    float approachStartedAt = -1f;
+    const float ApproachDurationSeconds = 1.15f;
     float stageStartedAt;
     Vector3 gestureStart;
     float closeupPulse;
@@ -261,7 +270,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (FindObjectOfType<GhostPartyPrototype>() != null) return;
         var go = new GameObject("GhostPartyPrototype_Runtime");
         instance = go.AddComponent<GhostPartyPrototype>();
-        DontDestroyOnLoad(go);
     }
 
     void Awake()
@@ -270,14 +278,65 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         instance = this;
         Application.targetFrameRate = 120;
         if (curtainPlan == null || curtainPlan.Count == 0) curtainPlan = BuildDefaultCurtainPlan();
+        embeddedInLevel = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path == "Assets/LevelWhitebox/Scenes/Level01_FirstFloor.unity";
+        if (embeddedInLevel) return; // WhiteboxPlayable creates the shared ghost after scene Awake.
         BuildWorld();
         BuildAudio();
         BuildHud();
         SetExplorePrompt();
     }
 
+    void Start()
+    {
+        if (!embeddedInLevel) return;
+        cam = Camera.main;
+        var player = GameObject.Find("InvisibleGhost");
+        if (cam == null || player == null)
+        {
+            Debug.LogError("Level01 curtain prank needs the whitebox camera and ghost.");
+            enabled = false;
+            return;
+        }
+        ghost = player.transform;
+        curtain = transform;
+        curtainHome = curtain.position;
+        curtainRotationHome = curtain.rotation;
+        curtainScaleHome = curtain.localScale;
+        var levelGuest = GameObject.Find("CurtainGuest");
+        guestHome = levelGuest != null ? levelGuest.transform.position : curtainHome + new Vector3(3.1f, -1.37f, -0.15f);
+        guestHome.y = 0.62f;
+        curtainGuestSpot = curtainHome + new Vector3(1.8f, -1.37f, -0.15f);
+        curtainGuestSpot.y = 0.62f;
+        guest = levelGuest != null ? levelGuest.transform
+            : MakeCircle("CurtainGuest", guestHome, 0.62f, new Color(0.84f, 0.50f, 0.38f)).transform;
+        guest.position = guestHome;
+        guestActor = guest.GetComponent<PrankNpcActor>();
+        if (guestActor == null) guestActor = guest.gameObject.AddComponent<PrankNpcActor>();
+        guestActor.EnsureInitialized(cam);
+        guestHead = guestActor.Head;
+        guestHeadHome = guestHead.position;
+        guestHeadScaleHome = guestHead.localScale;
+        guestScaleHome = guest.localScale;
+        BuildAudio();
+        BuildHud();
+        SetExplorePrompt();
+        canvas.enabled = false;
+        embeddedReady = true;
+    }
+
+    public bool IsEmbeddedPrankActive { get { return embeddedInLevel && embeddedReady && mode == Mode.Closeup; } }
+
+    public void StartEmbeddedPrank()
+    {
+        if (!embeddedInLevel || !embeddedReady || mode != Mode.Explore) return;
+        embeddedGhostReturnPosition = ghost.position;
+        canvas.enabled = true;
+        BeginPrank();
+    }
+
     void Update()
     {
+        if (embeddedInLevel && !embeddedReady) return;
         long diagnosticStart = System.Diagnostics.Stopwatch.GetTimestamp();
         motionEvents = 0;
         if (Input.GetKeyDown(KeyCode.F9))
@@ -303,16 +362,17 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         UpdateBeatCue();
         if (Input.GetKeyDown(KeyCode.L)) ToggleLanguage();
         HandleDeveloperShortcuts();
-        if (mode == Mode.Explore) UpdateExplore();
+        if (mode == Mode.Explore) { if (embeddedInLevel) UpdateEmbeddedExplore(); else UpdateExplore(); }
         else UpdateCloseup();
         gameplayCpuMs = ElapsedDiagnosticMs(diagnosticStart);
     }
 
     void LateUpdate()
     {
+        if (embeddedInLevel && !embeddedReady) return;
         // Compose the camera once, after gameplay has finished moving the scene.
         long diagnosticStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        UpdateCamera();
+        if (!embeddedInLevel) UpdateCamera();
         cameraCpuMs = ElapsedDiagnosticMs(diagnosticStart);
         UpdateWorldCue();
         UpdateGestureGuide();
@@ -422,6 +482,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void OnDisable()
     {
+        RhythmAccent.ClearClock();
         // Stopping Play mode or disabling the component preserves a partial round.
         FinishMotionSession();
         if (motionExportTask != null)
@@ -459,14 +520,15 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         MakeRect("Table", new Vector3(2.0f, 0.72f, -0.55f), new Vector3(2.2f, 0.18f, 1.25f), new Color(0.38f, 0.24f, 0.15f));
         MakeRect("TableLeg", new Vector3(2.0f, 0.25f, -0.55f), new Vector3(0.18f, 0.65f, 0.3f), new Color(0.25f, 0.15f, 0.10f));
         guest = MakeCircle("Guest", guestHome, 0.62f, new Color(0.84f, 0.50f, 0.38f)).transform;
-        guestHead = MakeCircle("GuestHead", guestHome + new Vector3(0, 0.88f, 0), 0.42f, new Color(0.94f, 0.70f, 0.52f)).transform;
+        guestActor = guest.gameObject.AddComponent<PrankNpcActor>();
+        guestActor.EnsureInitialized(cam);
+        guestHead = guestActor.Head;
         curtainHome = curtain.position;
         curtainScaleHome = curtain.localScale;
         guestHeadHome = guestHead.position;
         guestHeadScaleHome = guestHead.localScale;
         guestScaleHome = guest.localScale;
-        ghost = MakeCircle("InvisibleGhost", exploreGhostPos, 0.38f, new Color(0.48f, 0.93f, 0.95f, 0.45f)).transform;
-        var glow = ghost.gameObject.AddComponent<Light>(); glow.type = LightType.Point; glow.color = new Color(0.2f, 0.9f, 1f); glow.range = 2.5f; glow.intensity = 0.8f;
+        ghost = GhostPlayerAvatar.Create(exploreGhostPos);
         SetLayerRecursive(ghost.gameObject, 0);
     }
     void BuildAudio()
@@ -509,7 +571,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
             // Snare/clap on beats 2 and 4.
             float snare = 0f;
-            if (barBeat == 1 || barBeat == 3)
+            if (RhythmAccent.IsAccentBeat(beatIndex))
             {
                 float snareEnv = Mathf.Exp(-beatTime * 22f);
                 float noise = DeterministicNoise(i);
@@ -547,6 +609,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         double startDsp = AudioSettings.dspTime + 0.1;
         music.PlayScheduled(startDsp);
         beatClock.Start(startDsp);
+        RhythmAccent.ConfigureClock(startDsp, secondsPerBeat, heardBeatCompensation);
         Debug.Log($"Rhythm grid: {60.0 / secondsPerBeat:0.##} BPM, {secondsPerBeat * 1000.0:0.0} ms/beat, " +
                   $"heard-output compensation {heardBeatCompensation * 1000.0:0.0} ms.");
     }
@@ -756,12 +819,31 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     void UpdateEscapeGauge()
     {
         if (escapeGaugeCanvas == null || guest == null || cam == null) return;
+        if (beatClock != null)
+        {
+            // The synthesized BGM's clap/snare lands on beat indices 1, 3,
+            // 5... . Both the NPC idle and the gauge use this same accent.
+            long accentCycle = RhythmAccent.CycleAtBeat(beatClock.BeatIndex);
+            if (lastGaugeAccentCycle == long.MinValue) lastGaugeAccentCycle = accentCycle;
+            else if (accentCycle != lastGaugeAccentCycle)
+            {
+                lastGaugeAccentCycle = accentCycle;
+                SetDisplayedEscapeProgress(escapeProgress);
+            }
+        }
         bool visible = mode == Mode.Closeup && (stage == PrankStage.CurtainSequence || stage == PrankStage.Escaped);
         if (escapeGaugeCanvas.gameObject.activeSelf != visible) escapeGaugeCanvas.gameObject.SetActive(visible);
         if (!visible) return;
         escapeGaugeCanvas.transform.position = guest.position + cam.transform.up * 1.3f + cam.transform.right * 0.45f;
         escapeGaugeCanvas.transform.rotation = Quaternion.LookRotation(escapeGaugeCanvas.transform.position - cam.transform.position, Vector3.up);
-        escapeGaugeFill.fillAmount = Mathf.MoveTowards(escapeGaugeFill.fillAmount, escapeProgress / 4f, Time.deltaTime * 2f);
+        escapeGaugeFill.fillAmount = displayedEscapeProgress / 4f;
+    }
+
+    void SetDisplayedEscapeProgress(int value)
+    {
+        displayedEscapeProgress = Mathf.Clamp(value, 0, 4);
+        if (escapeGaugeFill != null) escapeGaugeFill.fillAmount = displayedEscapeProgress / 4f;
+        if (escapeGaugeText != null) escapeGaugeText.text = displayedEscapeProgress + "/4";
     }
 
     void ResetEscapeProgress()
@@ -769,8 +851,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         escapeProgress = 0;
         consecutiveEmptyBeats = 0;
         lastEscapeCountedBeat = double.NaN;
-        if (escapeGaugeFill != null) escapeGaugeFill.fillAmount = 0f;
-        if (escapeGaugeText != null) escapeGaugeText.text = "0/4";
     }
 
     bool RegisterEmptyBeat()
@@ -784,7 +864,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         int missed = 1 + Math.Max(0, (int)Math.Floor(beatClock.BeatIndex - curtainTargetBeat - BeatTolerance));
         consecutiveEmptyBeats = Math.Min(MissesPerEscapeSegment * 4, consecutiveEmptyBeats + missed);
         escapeProgress = consecutiveEmptyBeats / MissesPerEscapeSegment;
-        if (escapeGaugeText != null) escapeGaugeText.text = escapeProgress + "/4";
         if (escapeProgress < 4) return true;
         EscapeCurtain();
         return false;
@@ -813,7 +892,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (worldCueCanvas == null || curtain == null || cam == null) return;
         bool visible = false;
         string icon = "";
-        if (mode == Mode.Explore)
+        if (mode == Mode.Explore && !embeddedInLevel)
         {
             Vector2 ghostFloor = new Vector2(ghost.position.x, ghost.position.z);
             Vector2 curtainFloor = new Vector2(curtain.position.x, curtain.position.z);
@@ -1009,8 +1088,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     void UpdateExplore()
     {
         UpdateCurtainInvitation();
-        Vector3 input = new Vector3(Input.GetAxisRaw("Horizontal"), 0, Input.GetAxisRaw("Vertical"));
-        if (input.sqrMagnitude > 1) input.Normalize();
+        Vector3 input = GhostPlayerAvatar.ReadGroundInput();
         ghost.position += input * moveSpeed * Time.deltaTime;
         ghost.position = new Vector3(Mathf.Clamp(ghost.position.x, -6.6f, 6.6f), 0.38f, Mathf.Clamp(ghost.position.z, -3.0f, 3.7f));
         Vector2 ghostFloor = new Vector2(ghost.position.x, ghost.position.z);
@@ -1032,6 +1110,24 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         status.text = T("靠近右侧窗帘开始恶作剧", "Approach the curtain to start the prank");
     }
 
+    void UpdateEmbeddedExplore()
+    {
+        // The floor controller owns movement and the map camera. The prank
+        // only keeps its local cast reset between attempts.
+        UpdateCurtainInvitation();
+        if (guestLeaveAt > 0f && Time.time > guestLeaveAt)
+            guest.position = Vector3.MoveTowards(guest.position,
+                guestHome + Vector3.right * 4.5f, Time.deltaTime * 2.5f);
+        if (guestHead != null) guestHead.position = guest.position + Vector3.up * 0.88f;
+        if (guest.position.x > guestHome.x + 4.2f)
+        {
+            guest.position = guestHome;
+            guest.rotation = Quaternion.identity;
+            guest.localScale = guestScaleHome;
+            guestLeaveAt = -1f;
+        }
+    }
+
     void UpdateCurtainInvitation()
     {
         if (curtain == null || beatClock == null) return;
@@ -1040,7 +1136,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         // moving its interaction origin or affecting the close-up sequence.
         float tease = phase < 0.32f ? ActionEnvelope(phase / 0.32f) : 0f;
         curtain.position = curtainHome + Vector3.up * (0.065f * tease);
-        curtain.rotation = Quaternion.Euler(0f, 0f, -2.5f * tease);
+        curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -2.5f * tease);
         curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1f, 1f - 0.015f * tease, 1f));
     }
 
@@ -1048,19 +1144,22 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         StartMotionSession();
         ResetEscapeProgress();
+        SetDisplayedEscapeProgress(0);
         mode = Mode.Closeup; stage = PrankStage.CurtainSequence; stageStartedAt = Time.time; retryMessage = "";
         curtainStep = 0;
+        approachStartedAt = -1f;
         renderedHudStep = -1;
         renderedCueStep = -1;
         curtainTargetBeat = beatClock.NextWholeBeat(firstInputLeadBeats);
         ResetGestureState();
         curtain.position = curtainHome;
-        curtain.rotation = Quaternion.identity;
+        curtain.rotation = curtainRotationHome;
         curtain.localScale = curtainScaleHome;
         guest.position = guestHome;
         guest.rotation = Quaternion.identity;
         guest.localScale = guestScaleHome;
-        ghost.position = new Vector3(-2.7f, 0.2f, -1f); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0.35f);
+        if (!embeddedInLevel) ghost.position = new Vector3(-2.7f, 0.2f, -1f);
+        vignette.color = new Color(0.05f, 0.02f, 0.12f, 0.35f);
         title.text = T("窗帘恶作剧 · 特写", "Curtain Prank · Close-up");
         ShowFeedback(T("进入特写", "Entering close-up"), new Color(0.55f, 0.95f, 1f));
     }
@@ -1111,11 +1210,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             gestureArmed = false;
             if (action == CurtainAction.AutoApproach)
             {
-                double approachStart = curtainTargetBeat - PlanDuration(curtainStep);
+                if (approachStartedAt < 0f) approachStartedAt = Time.time;
                 float approach = Mathf.SmoothStep(0f, 1f,
-                    Mathf.Clamp01((float)((beatClock.BeatIndex - approachStart) / PlanDuration(curtainStep))));
+                    Mathf.Clamp01((Time.time - approachStartedAt) / ApproachDurationSeconds));
                 guest.position = Vector3.Lerp(guestHome, curtainGuestSpot, approach);
                 if (guestHead != null) guestHead.position = guest.position + new Vector3(0f, 0.88f, 0f);
+                if (approach >= 1f) AdvanceCurtainStep();
+                return;
             }
             if (beatClock.BeatIndex >= curtainTargetBeat) AdvanceCurtainStep();
             return;
@@ -1314,9 +1415,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             UpdateStageHud();
             return;
         }
-        // Target beat is the end of the next configured step. This keeps the
-        // two-beat approach ending on beat 5 instead of accidentally ending on 4.
-        curtainTargetBeat += PlanDuration(curtainStep);
+        if (PlanAction(curtainStep) == CurtainAction.AutoApproach)
+            approachStartedAt = Time.time;
+        else if (PlanAction(curtainStep - 1) == CurtainAction.AutoApproach)
+            curtainTargetBeat = beatClock.NextWholeBeat(1);
+        else
+            curtainTargetBeat += PlanDuration(curtainStep);
         // Publish the next operation before the next rendered frame. The
         // previous successful animation can finish independently of the cue.
         UpdateStageHud();
@@ -1340,7 +1444,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         motionFinishPending = motionSessionActive;
         ResetGestureState();
-        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain"); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); ghost.position = exploreGhostPos;
+        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain"); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); ghost.position = embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos;
+        if (embeddedInLevel) canvas.enabled = false;
+        if (embeddedInLevel && EmbeddedPrankFinished != null) EmbeddedPrankFinished();
         if (inputCueIcon != null) inputCueIcon.text = "";
         if (guestHead != null) guestHead.localScale = guestHeadScaleHome;
     }
@@ -1369,6 +1475,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         StartMotionSession();
         ResetEscapeProgress();
+        SetDisplayedEscapeProgress(0);
         mode = Mode.Closeup;
         stage = PrankStage.CurtainSequence;
         renderedHudStep = -1;
@@ -1376,10 +1483,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         stageStartedAt = Time.time;
         retryMessage = "";
         curtainStep = 0;
+        approachStartedAt = -1f;
         curtainTargetBeat = beatClock.NextWholeBeat(firstInputLeadBeats);
         ResetGestureState();
         curtain.position = curtainHome;
-        curtain.rotation = Quaternion.identity;
+        curtain.rotation = curtainRotationHome;
         guest.position = guestHome;
         guest.rotation = Quaternion.identity;
         guest.localScale = guestScaleHome;
@@ -1394,9 +1502,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (mode != Mode.Closeup) return;
         if (Input.GetKeyDown(KeyCode.R)) ResetPrank();
-        if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 4; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F3)) { curtainStep = 7; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F4)) { curtainStep = 15; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 3; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F3)) { curtainStep = 6; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (Input.GetKeyDown(KeyCode.F4)) { curtainStep = 14; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
     }
 
     void UpdatePrankVisuals()
@@ -1404,7 +1512,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (mode != Mode.Closeup || curtain == null || guest == null) return;
         float elapsed = Time.time - stageStartedAt;
         curtain.position = curtainHome;
-        curtain.rotation = Quaternion.identity;
+        curtain.rotation = curtainRotationHome;
         curtain.localScale = curtainScaleHome;
 
         if (stage == PrankStage.CurtainSequence && curtainStep < PlanCount)
@@ -1418,18 +1526,22 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             float impactArc = ActionEnvelope(impactProgress);
             float hit = Time.time < actionImpactUntil ? impactArc : 0f;
             double stepStartBeat = curtainTargetBeat - CurrentStepDuration;
-            float stepProgress = Mathf.Clamp01((float)((beatClock.BeatIndex - stepStartBeat) / CurrentStepDuration));
+            float stepProgress = action == CurtainAction.AutoApproach
+                ? Mathf.Clamp01((Time.time - approachStartedAt) / ApproachDurationSeconds)
+                : Mathf.Clamp01((float)((beatClock.BeatIndex - stepStartBeat) / CurrentStepDuration));
             // Leave room for the preceding tap's animation before lifting.
             float pull = action == CurtainAction.AutoLift
                 ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.45f, 1f, stepProgress)) : hit;
-            Vector3 guestBase = curtainStep >= 4 ? curtainGuestSpot : guestHome;
+            Vector3 guestBase = curtainStep >= 3 ? curtainGuestSpot : guestHome;
             float guestTilt = 0f;
             float guestScale = 1f;
             Vector3 guestOffset = Vector3.zero;
 
             // The approach is driven by HandleCurtainSequence so the guest
             // actually reaches the curtain. Other steps pose around that spot.
-            if (action != CurtainAction.AutoApproach) guest.position = guestBase;
+            // The second tap's impact briefly remains visible while the
+            // approach begins; it must not snap the moving guest home.
+            if (PlanAction(curtainStep) != CurtainAction.AutoApproach) guest.position = guestBase;
 
             bool automatic = IsAutomaticAction(action);
             bool confirmed = Time.time < actionImpactUntil;
@@ -1437,17 +1549,17 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             {
                 case CurtainAction.Tap:
                     curtain.position += new Vector3(Mathf.Sin(closeupPulse * 18f) * 0.10f * hit, 0f, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, Mathf.Sin(closeupPulse * 18f) * 5f * hit);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, Mathf.Sin(closeupPulse * 18f) * 5f * hit);
                     break;
                 case CurtainAction.AutoLift:
                     curtain.position += new Vector3(-0.12f * pull, 0.20f * pull, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, -11f * pull);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -11f * pull);
                     curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1f, 1f - 0.10f * pull, 1f));
                     break;
                 case CurtainAction.AutoApproach:
                     float liftReturn = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(stepProgress / 0.35f));
                     curtain.position += new Vector3(-0.12f, 0.20f, 0f) * liftReturn;
-                    curtain.rotation = Quaternion.Euler(0f, 0f, -11f * liftReturn);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -11f * liftReturn);
                     curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1f, 1f - 0.10f * liftReturn, 1f));
                     guestTilt = Mathf.Sin(closeupPulse * 9f) * 4f * ActionEnvelope(stepProgress);
                     break;
@@ -1459,7 +1571,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                     break;
                 case CurtainAction.DragRight:
                     curtain.position += new Vector3(-0.48f * pull, 0.04f * pull, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, -8f * pull);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -8f * pull);
                     guestOffset = new Vector3(-0.07f * pull, 0f, 0f);
                     break;
                 case CurtainAction.DragDown:
@@ -1471,26 +1583,26 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 case CurtainAction.SwipeRight:
                     float side = action == CurtainAction.SwipeLeft ? -1f : 1f;
                     curtain.position += new Vector3(side * 0.26f * hit, -0.10f * hit, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, side * 8f * hit);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, side * 8f * hit);
                     guestOffset = new Vector3(side * 0.18f * hit, 0.04f * hit, 0f);
                     guestTilt = side * 16f * hit;
                     guestScale = 0.93f + 0.07f * (1f - hit);
                     break;
                 case CurtainAction.WindLeft:
                     curtain.position += new Vector3(-0.50f * pull, -0.18f * pull, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, -15f * pull);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -15f * pull);
                     guestOffset = new Vector3(-0.20f * pull, -0.07f * pull, 0f);
                     guestTilt = -10f * pull;
                     break;
                 case CurtainAction.Hold:
                     curtain.position += new Vector3(-0.50f, -0.18f, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, -15f);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, -15f);
                     guestOffset = new Vector3(-0.20f, -0.07f, 0f);
                     guestTilt = -10f + Mathf.Sin(closeupPulse * 5f) * 2f;
                     break;
                 case CurtainAction.ThrowRightRelease:
                     curtain.position += new Vector3(0.40f * pull, 0.10f * pull, 0f);
-                    curtain.rotation = Quaternion.Euler(0f, 0f, 18f * pull);
+                    curtain.rotation = curtainRotationHome * Quaternion.Euler(0f, 0f, 18f * pull);
                     guestOffset = new Vector3(0.42f * pull, 0.18f * pull, 0f);
                     guestTilt = 22f * pull;
                     break;
@@ -1503,7 +1615,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         else if (stage == PrankStage.Complete)
         {
             float launch = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / 1.15f));
-            Vector3 exit = new Vector3(7.4f, guestLaunchOrigin.y, guestLaunchOrigin.z);
+            Vector3 exit = new Vector3(embeddedInLevel ? guestHome.x + 4.5f : 7.4f, guestLaunchOrigin.y, guestLaunchOrigin.z);
             guest.position = Vector3.Lerp(guestLaunchOrigin, exit, launch);
             guest.position += Vector3.up * Mathf.Sin(launch * Mathf.PI) * 1.0f;
             guest.rotation = Quaternion.Slerp(guestLaunchRotation, Quaternion.Euler(0f, 0f, 55f), launch);
@@ -1514,7 +1626,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             float slap = ActionEnvelope(Mathf.Clamp01(elapsed / 0.24f));
             curtain.position = Vector3.Lerp(curtainLaunchOrigin, curtainHome, finish)
                 + new Vector3(0.40f, 0.10f, 0f) * slap;
-            curtain.rotation = Quaternion.Slerp(curtainLaunchRotation, Quaternion.identity, finish)
+            curtain.rotation = Quaternion.Slerp(curtainLaunchRotation, curtainRotationHome, finish)
                 * Quaternion.Euler(0f, 0f, 18f * slap);
             curtain.localScale = Vector3.Lerp(curtainLaunchScale, curtainScaleHome, finish);
         }
@@ -1523,9 +1635,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             float release = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / 0.24f));
             float leave = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / 1.15f));
             curtain.position = Vector3.Lerp(curtainLaunchOrigin, curtainHome, release);
-            curtain.rotation = Quaternion.Slerp(curtainLaunchRotation, Quaternion.identity, release);
+            curtain.rotation = Quaternion.Slerp(curtainLaunchRotation, curtainRotationHome, release);
             curtain.localScale = Vector3.Lerp(curtainLaunchScale, curtainScaleHome, release);
-            guest.position = Vector3.Lerp(guestLaunchOrigin, new Vector3(7.4f, guestLaunchOrigin.y, guestLaunchOrigin.z), leave);
+            guest.position = Vector3.Lerp(guestLaunchOrigin, new Vector3(embeddedInLevel ? guestHome.x + 4.5f : 7.4f, guestLaunchOrigin.y, guestLaunchOrigin.z), leave);
             guest.rotation = Quaternion.Slerp(guestLaunchRotation, Quaternion.identity, release);
             guest.localScale = Vector3.Lerp(guestLaunchScale, guestScaleHome, release);
         }
@@ -1559,7 +1671,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             case PrankStage.CurtainSequence:
                 title.text = T("窗帘恶作剧 · 节拍操作", "Curtain Prank · Beat Actions");
                 actionHint.text = T("所有手动操作都要落在亮拍；按住左键，从红色起点圆拖到黄色目标圆", "Manual actions land on the bright beat; hold left mouse and drag from the red start ring to the yellow target ring");
-                progressText.text = T("流程拍位　", "Beat progress　") + CurrentPlanBeatNumber() + "/" + TotalPlanBeats;
+                progressText.text = CurrentAction == CurtainAction.AutoApproach
+                    ? T("过场：客人靠近（不计拍）", "Transition: guest approaches (unmetered)")
+                    : T("流程拍位　", "Beat progress　") + CurrentPlanBeatNumber() + "/" + TotalPlanBeats;
                 break;
             case PrankStage.Complete:
                 title.text = T("窗帘恶作剧 · 完成", "Curtain Prank · Complete");
@@ -1603,8 +1717,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 default: icon = "↗"; instruction = T("保持按住，向右上甩出后松开", "KEEP HOLDING + SWIPE UPPER-RIGHT, THEN RELEASE"); break;
             }
             if (inputCueIcon != null) inputCueIcon.text = icon;
-            prompt.text = T($"第 {CurrentPlanBeatNumber()}/{TotalPlanBeats} 拍　{instruction}",
-                            $"Beat {CurrentPlanBeatNumber()}/{TotalPlanBeats}　{instruction}");
+            prompt.text = action == CurtainAction.AutoApproach ? instruction
+                : T($"第 {CurrentPlanBeatNumber()}/{TotalPlanBeats} 拍　{instruction}",
+                    $"Beat {CurrentPlanBeatNumber()}/{TotalPlanBeats}　{instruction}");
             renderedCueStep = curtainStep;
             renderedCueLanguage = language;
         }
@@ -1816,7 +1931,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     float GetPressureZoomOffset(bool mapFraming)
     {
-        float target = mapFraming ? 0f : -Mathf.Min(1.5f, escapeProgress * Mathf.Max(0f, escapeZoomPerSegment));
+        float target = mapFraming ? 0f : -Mathf.Min(1.5f, displayedEscapeProgress * Mathf.Max(0f, escapeZoomPerSegment));
         if (target != pressureZoomTarget)
         {
             pressureZoomStart = appliedPressureZoomOffset;
@@ -1920,6 +2035,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void TriggerCameraImpact(CurtainAction action)
     {
+        if (embeddedInLevel)
+        {
+            var rig = cam != null ? cam.GetComponent<PrankCameraRig>() : null;
+            if (rig != null) rig.PulseImpact(action == CurtainAction.ThrowRightRelease ? 1.5f : 0.65f);
+            return;
+        }
         if (action != CurtainAction.Tap && action != CurtainAction.ThrowRightRelease) return;
         cameraZoomStartOffset = appliedCameraZoomOffset;
         cameraImpactAction = action;
@@ -2000,6 +2121,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         readonly double heardOutputCompensation;
         double start;
         public double BeatIndex { get; private set; }
+        public double SecondsPerBeat { get { return secondsPerBeat; } }
         public BeatClock(double secondsPerBeat, double heardOutputCompensation)
         {
             this.secondsPerBeat = Math.Max(0.0001, secondsPerBeat);
