@@ -11,7 +11,7 @@ using GhostParty.LevelWhitebox;
 
 /// <summary>
 /// First playable prototype for "别在这儿蹦跶": exploration -> curtain prank close-up -> guest exit.
-/// Runtime-only setup keeps the existing sample scene and project assets intact.
+/// Scene-authored world-space canvases are shared by the sample and whitebox prototypes.
 /// </summary>
 public sealed class GhostPartyPrototype : MonoBehaviour
 {
@@ -117,6 +117,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     [Header("HUD Layout (edit in Inspector)")]
     [SerializeField] HudLayoutSettings hudLayout = new HudLayoutSettings();
+    [Tooltip("F8 toggles the original diagnostic panel. Player prompts are shown separately.")]
+    [SerializeField] bool developerHudVisible = false;
 
     [Header("Language")]
     [SerializeField] Language language = Language.Chinese;
@@ -149,7 +151,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Text beatAssistButtonText;
     Image vignette, beatFlash, topHudPanel, bottomHudPanel;
     Canvas worldCueCanvas;
-    Image worldCueCircle;
+    CurtainGameplayUI gameplayUI;
     Text worldCueText;
     Canvas nextWorldCueCanvas;
     Text nextWorldCueText;
@@ -377,6 +379,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         UpdateWorldCue();
         UpdateGestureGuide();
         UpdateEscapeGauge();
+        UpdatePlayerHud();
         SampleMotionDiagnostics();
     }
 
@@ -630,7 +633,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     void BuildHud()
     {
         var canvasGo = new GameObject("PrototypeHUD"); canvas = canvasGo.AddComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 50;
-        canvasGo.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        var scaler = canvasGo.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
         canvasGo.AddComponent<GraphicRaycaster>();
         if (FindObjectOfType<EventSystem>() == null) { var es = new GameObject("EventSystem"); es.AddComponent<EventSystem>(); es.AddComponent<StandaloneInputModule>(); }
         // Compact top-left HUD: keep the play space visible and avoid covering the room.
@@ -645,7 +651,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         inputCueIcon = MakeText("InputCueIcon", new Vector2(0.36f, hudLayout.promptAnchor.y), new Vector2(0.055f, 0.075f), 23, TextAnchor.MiddleCenter, new Color(1f, 0.86f, 0.46f));
         BuildWorldCue();
         BuildGestureGuide();
-        BuildEscapeGauge();
         status = MakeText("Status", hudLayout.statusAnchor, hudLayout.statusSize, hudLayout.statusFontSize, TextAnchor.UpperLeft, new Color(0.72f, 0.85f, 0.92f));
         feedback = MakeText("Feedback", hudLayout.feedbackAnchor, hudLayout.feedbackSize, hudLayout.feedbackFontSize, TextAnchor.MiddleLeft, Color.white);
         feedback.text = "";
@@ -664,52 +669,39 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         vignette.rectTransform.anchorMax = Vector2.one;
         vignette.rectTransform.offsetMin = vignette.rectTransform.offsetMax = Vector2.zero;
         vignette.transform.SetAsFirstSibling();
+        SetDeveloperHudVisible(developerHudVisible);
     }
 
     void BuildWorldCue()
     {
-        var go = new GameObject("CurtainWorldCue");
-        worldCueCanvas = go.AddComponent<Canvas>();
-        worldCueCanvas.renderMode = RenderMode.WorldSpace;
-        worldCueCanvas.worldCamera = cam;
-        worldCueCanvas.sortingOrder = 100;
-        var root = go.GetComponent<RectTransform>();
-        root.sizeDelta = new Vector2(100f, 100f);
-        go.transform.localScale = Vector3.one * 0.006f;
-
-        var bg = new GameObject("WhiteCircle");
-        bg.transform.SetParent(go.transform, false);
-        var bgRt = bg.AddComponent<RectTransform>();
-        bgRt.anchorMin = Vector2.zero; bgRt.anchorMax = Vector2.one; bgRt.offsetMin = bgRt.offsetMax = Vector2.zero;
-        worldCueCircle = bg.AddComponent<Image>();
-        worldCueCircle.sprite = CreateCircleSprite();
-        worldCueCircle.color = Color.white;
-        worldCueCircle.raycastTarget = false;
-
-        var label = new GameObject("CueLabel");
-        label.transform.SetParent(go.transform, false);
-        var labelRt = label.AddComponent<RectTransform>();
-        labelRt.anchorMin = Vector2.zero; labelRt.anchorMax = Vector2.one; labelRt.offsetMin = labelRt.offsetMax = Vector2.zero;
-        worldCueText = label.AddComponent<Text>();
-        worldCueText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        worldCueText.alignment = TextAnchor.MiddleCenter;
-        worldCueText.fontSize = 34;
-        worldCueText.fontStyle = FontStyle.Bold;
-        worldCueText.color = Color.black;
-        worldCueText.raycastTarget = false;
-        // A separate sibling canvas prevents the preview inheriting the beat pop.
-        var next = Instantiate(go);
-        next.name = "CurtainNextBeatCue";
-        nextWorldCueCanvas = next.GetComponent<Canvas>();
-        nextWorldCueCanvas.sortingOrder = 99;
-        nextWorldCueText = next.GetComponentInChildren<Text>();
-        nextWorldCueText.fontSize = 41;
-        var nextGroup = next.AddComponent<CanvasGroup>();
-        nextGroup.alpha = 0.7f;
-        nextGroup.interactable = false;
-        nextGroup.blocksRaycasts = false;
-        next.SetActive(false);
-        go.SetActive(false);
+        foreach (var candidate in FindObjectsOfType<CurtainGameplayUI>(true))
+        {
+            if (candidate.gameObject.scene != gameObject.scene) continue;
+            gameplayUI = candidate;
+            break;
+        }
+        if (gameplayUI == null)
+        {
+            var prefab = Resources.Load<GameObject>("UI/CurtainGameplayUI");
+            if (prefab != null) gameplayUI = Instantiate(prefab).GetComponent<CurtainGameplayUI>();
+        }
+        if (gameplayUI == null)
+        {
+            // The player-facing HUD can operate without the optional world-space prefab.
+            gameplayUI = canvas.gameObject.AddComponent<CurtainGameplayUI>();
+        }
+        gameplayUI.AttachPlayerHud(canvas);
+        gameplayUI.BindCamera(cam);
+        if (!gameplayUI.IsConfigured) return;
+        worldCueCanvas = gameplayUI.CurrentCueCanvas;
+        worldCueText = gameplayUI.CurrentCueLabel;
+        nextWorldCueCanvas = gameplayUI.NextCueCanvas;
+        nextWorldCueText = gameplayUI.NextCueLabel;
+        escapeGaugeCanvas = gameplayUI.EscapeCanvas;
+        escapeGaugeFill = gameplayUI.EscapeFill;
+        escapeGaugeText = gameplayUI.EscapeLabel;
+        worldCueCanvas.enabled = nextWorldCueCanvas.enabled = escapeGaugeCanvas.enabled = false;
+        SetDisplayedEscapeProgress(0);
     }
 
     void BuildGestureGuide()
@@ -734,6 +726,125 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         gestureGuideStartText.text = T("从这里", "START");
         gestureGuideTargetText.text = T("拖到这里", "DRAG TO");
         go.SetActive(false);
+    }
+
+    void SetDeveloperHudVisible(bool visible)
+    {
+        developerHudVisible = visible;
+        // Keep the original diagnostic view available without asking players
+        // to read beat numbers, stage counters, and configuration controls.
+        Component[] diagnostics = { topHudPanel, title, actionHint, progressText,
+            prompt, inputCueIcon, status, feedback, languageButton, difficultyButton };
+        foreach (Component item in diagnostics)
+            if (item != null) item.gameObject.SetActive(visible);
+        if (bottomHudPanel != null) bottomHudPanel.gameObject.SetActive(false);
+        if (beatAssistButtonText != null && beatAssistButtonText.transform.parent != null)
+            beatAssistButtonText.transform.parent.gameObject.SetActive(visible);
+        if (!visible && gestureGuideRoot != null) gestureGuideRoot.gameObject.SetActive(false);
+    }
+
+    void UpdatePlayerHud()
+    {
+        if (gameplayUI == null || canvas == null) return;
+        var cue = new CurtainGameplayUI.PlayerCue();
+        if (mode != Mode.Closeup)
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Automatic;
+            cue.instruction = T("靠近窗帘，按 E 开始", "Press E near the curtain");
+            cue.timing = T("WASD 移动", "WASD to move");
+            gameplayUI.PresentPlayerCue(!embeddedInLevel, cue, cam, curtainHome);
+            return;
+        }
+        if (stage != PrankStage.CurtainSequence || curtainStep >= PlanCount)
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Result;
+            cue.instruction = stage == PrankStage.Escaped ? T("他挣脱了！", "He broke free!") : T("成功吓跑！", "Prank complete!");
+            cue.timing = T("即将回到探索", "Returning to exploration");
+            gameplayUI.PresentPlayerCue(true, cue, cam, curtainHome);
+            return;
+        }
+
+        CurtainAction action = PlanAction(curtainStep);
+        cue.beatsToTarget = beatClock == null ? 1f : (float)(curtainTargetBeat - beatClock.BeatIndex);
+        cue.tolerance = BeatTolerance;
+        cue.held = curtainHeld;
+        cue.armed = gestureArmed;
+        cue.recovering = gestureRetryPending && Time.time < gestureRetryReadyAt;
+        cue.motionReady = gestureStartCaptured;
+        cue.icon = action == CurtainAction.Tap ? T("点", "LMB") : CueIcon(action);
+        cue.nextLabel = T("下一步", "NEXT");
+        // Only preview the adjacent operation. Never skip over an automatic stage.
+        if (!IsAutomaticAction(action) && curtainStep + 1 < PlanCount && !IsAutomaticAction(PlanAction(curtainStep + 1)))
+            cue.nextIcon = PlanAction(curtainStep + 1) == CurtainAction.Tap ? T("点", "LMB") : CueIcon(PlanAction(curtainStep + 1));
+
+        if (IsAutomaticAction(action))
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Automatic;
+            cue.instruction = action == CurtainAction.AutoApproach ? T("等客人走近", "Let the guest approach")
+                : action == CurtainAction.AutoLift ? T("窗帘正在抬起", "The curtain is lifting") : T("窗帘正在收紧", "The curtain is tightening");
+            cue.timing = action == CurtainAction.AutoWrapComplete
+                ? T("自动演出 · 可以松开鼠标", "Automatic · you may release the mouse")
+                : T("自动演出 · 不用操作", "Automatic · no input needed");
+        }
+        else if (action == CurtainAction.Tap)
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Tap;
+            cue.instruction = T("点一下左键", "Tap the left mouse button");
+            cue.timing = Mathf.Abs(cue.beatsToTarget) <= cue.tolerance
+                ? T("现在点！", "TAP NOW!") : T("等外圈合拢", "Wait for the rings to meet");
+        }
+        else if (action == CurtainAction.Hold)
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Hold;
+            cue.instruction = T("继续按住，别松手", "Keep holding · do not release");
+            cue.timing = T("保持到下一拍", "Hold through the next beat");
+        }
+        else
+        {
+            cue.kind = CurtainGameplayUI.CueKind.Direction;
+            cue.instruction = PlayerDirectionInstruction(action);
+            cue.motionProgress = ReadGestureProgress(action);
+            cue.timing = !cue.held ? (Input.GetMouseButton(0)
+                    ? T("先松开，再按住左键", "Release, then hold the mouse button")
+                    : T("先按住左键", "Hold the left mouse button first"))
+                : gestureArmed ? T("到位了 · 按住等拍点", "Ready · keep holding for the beat")
+                : gestureStartCaptured ? T("现在跟箭头滑动", "Swipe with the arrow now")
+                : T("保持按住 · 等拍圈亮起再滑动", "Keep holding · swipe when the ring lights up");
+        }
+        if (cue.recovering) cue.timing = T("回位中 · 稍等一拍", "Recovering · wait one beat");
+        gameplayUI.PresentPlayerCue(true, cue, cam, curtainHome);
+    }
+
+    string PlayerDirectionInstruction(CurtainAction action)
+    {
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return T("按住左键，向右滑", "Hold LMB · swipe right");
+            case CurtainAction.SwipeLeft: return T("按住左键，向左滑", "Hold LMB · swipe left");
+            case CurtainAction.DragDown: return T("按住左键，向下拉", "Hold LMB · pull down");
+            case CurtainAction.WindLeft: return T("向左下拉，保持按住", "Pull lower-left · keep holding");
+            default: return T("按住左键，向右上甩", "Hold LMB · throw upper-right");
+        }
+    }
+
+    float ReadGestureProgress(CurtainAction action)
+    {
+        if (gestureArmed) return 1f;
+        if (!curtainHeld || !gestureStartCaptured) return 0f;
+        Vector3 delta = Input.mousePosition - gestureStart;
+        float x = delta.x / Mathf.Max(1f, GestureThreshold * Screen.width);
+        float y = delta.y / Mathf.Max(1f, GestureThreshold * Screen.height);
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return Mathf.Clamp01(x);
+            case CurtainAction.SwipeLeft: return Mathf.Clamp01(-x);
+            case CurtainAction.DragDown: return Mathf.Clamp01(-y);
+            case CurtainAction.WindLeft: return Mathf.Clamp01(Mathf.Min(-x, -y));
+            case CurtainAction.ThrowRightRelease: return Mathf.Clamp01(Mathf.Min(x, y));
+            default: return 0f;
+        }
     }
 
     Image MakeGestureGuideImage(string name, Sprite sprite, Color color)
@@ -769,53 +880,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         return text;
     }
 
-    void BuildEscapeGauge()
-    {
-        var go = new GameObject("GuestEscapeGauge");
-        escapeGaugeCanvas = go.AddComponent<Canvas>();
-        escapeGaugeCanvas.renderMode = RenderMode.WorldSpace;
-        escapeGaugeCanvas.worldCamera = cam;
-        escapeGaugeCanvas.sortingOrder = 100;
-        go.GetComponent<RectTransform>().sizeDelta = new Vector2(80f, 80f);
-        go.transform.localScale = Vector3.one * 0.006f;
-        Sprite ring = CreateEscapeRingSprite();
-        foreach (bool foreground in new[] { false, true })
-        {
-            var part = new GameObject(foreground ? "Progress" : "Track");
-            part.transform.SetParent(go.transform, false);
-            var rect = part.AddComponent<RectTransform>();
-            rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one;
-            rect.offsetMin = rect.offsetMax = Vector2.zero;
-            var image = part.AddComponent<Image>();
-            image.sprite = ring;
-            image.raycastTarget = false;
-            image.color = foreground ? new Color(0.35f, 1f, 0.28f, 1f) : new Color(0.08f, 0.20f, 0.10f, 0.85f);
-            if (foreground)
-            {
-                escapeGaugeFill = image;
-                image.type = Image.Type.Filled;
-                image.fillMethod = Image.FillMethod.Radial360;
-                image.fillOrigin = (int)Image.Origin360.Top;
-                image.fillClockwise = true;
-                image.fillAmount = 0f;
-            }
-        }
-        var label = new GameObject("EscapeCount");
-        label.transform.SetParent(go.transform, false);
-        var labelRect = label.AddComponent<RectTransform>();
-        labelRect.anchorMin = Vector2.zero; labelRect.anchorMax = Vector2.one;
-        labelRect.offsetMin = labelRect.offsetMax = Vector2.zero;
-        escapeGaugeText = label.AddComponent<Text>();
-        escapeGaugeText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        escapeGaugeText.fontSize = 22;
-        escapeGaugeText.fontStyle = FontStyle.Bold;
-        escapeGaugeText.alignment = TextAnchor.MiddleCenter;
-        escapeGaugeText.color = new Color(0.55f, 1f, 0.45f);
-        escapeGaugeText.raycastTarget = false;
-        escapeGaugeText.text = "0/4";
-        go.SetActive(false);
-    }
-
     void UpdateEscapeGauge()
     {
         if (escapeGaugeCanvas == null || guest == null || cam == null) return;
@@ -831,11 +895,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 SetDisplayedEscapeProgress(escapeProgress);
             }
         }
-        bool visible = mode == Mode.Closeup && (stage == PrankStage.CurtainSequence || stage == PrankStage.Escaped);
-        if (escapeGaugeCanvas.gameObject.activeSelf != visible) escapeGaugeCanvas.gameObject.SetActive(visible);
+        bool visible = mode == Mode.Closeup && (stage == PrankStage.CurtainSequence || stage == PrankStage.Escaped)
+            && ((escapeProgress > 0 && displayedEscapeProgress > 0) || stage == PrankStage.Escaped);
+        escapeGaugeCanvas.enabled = visible;
         if (!visible) return;
-        escapeGaugeCanvas.transform.position = guest.position + cam.transform.up * 1.3f + cam.transform.right * 0.45f;
-        escapeGaugeCanvas.transform.rotation = Quaternion.LookRotation(escapeGaugeCanvas.transform.position - cam.transform.position, Vector3.up);
+        gameplayUI.FollowGuest(guest.position, cam);
         escapeGaugeFill.fillAmount = displayedEscapeProgress / 4f;
     }
 
@@ -899,56 +963,22 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             visible = Vector2.Distance(ghostFloor, curtainFloor) < interactionRange;
             icon = "E";
         }
-        else if (mode == Mode.Closeup && stage == PrankStage.CurtainSequence && curtainStep < PlanCount)
-        {
-            visible = true;
-            icon = CueIcon(PlanAction(curtainStep));
-        }
-
-        // Directional actions already have a dedicated screen-space path. The
-        // world badge would sit on top of that path and make the gesture look
-        // like several competing targets, so keep it for taps and exploration.
-        bool directionalCurrent = mode == Mode.Closeup && stage == PrankStage.CurtainSequence
-            && curtainStep < PlanCount && IsDirectionalAction(PlanAction(curtainStep));
-        if (directionalCurrent) visible = false;
-
-        if (worldCueCanvas.gameObject.activeSelf != visible) worldCueCanvas.gameObject.SetActive(visible);
-        bool nextVisible = visible && mode == Mode.Closeup && stage == PrankStage.CurtainSequence
-            && curtainStep < PlanCount && !IsAutomaticAction(PlanAction(curtainStep))
-            && curtainStep + 1 < PlanCount && !IsAutomaticAction(PlanAction(curtainStep + 1));
-        if (nextWorldCueCanvas != null && nextWorldCueCanvas.gameObject.activeSelf != nextVisible)
-            nextWorldCueCanvas.gameObject.SetActive(nextVisible);
+        // During a challenge, the single screen-space HUD owns every cue.
+        worldCueCanvas.enabled = visible;
+        if (nextWorldCueCanvas != null) nextWorldCueCanvas.enabled = false;
         if (!visible) return;
-        // Follow the framing transition, not individual swipes or tap zooms.
-        // Camera-up keeps this extra displacement downward on screen.
-        worldCueCanvas.transform.position = curtainHome + new Vector3(-0.92f, -0.18f, -0.32f)
-            - cam.transform.up * (0.22f * worldCueCloseupBlend);
-        // Face the camera with the canvas front side; the opposite billboard
-        // direction makes text and arrows appear horizontally mirrored.
-        worldCueCanvas.transform.rotation = Quaternion.LookRotation(worldCueCanvas.transform.position - cam.transform.position, Vector3.up);
-        worldCueText.fontSize = mode == Mode.Explore ? 51 : 41;
-        worldCueCircle.color = Color.white;
         // Keep the action readable throughout the beat; the whole badge pops
         // on the musical pulse, independently of whether the player acts.
         float beatPhase = beatClock == null ? 1f : Mathf.Repeat((float)beatClock.BeatIndex, 1f);
         float pop = beatPhase < 0.20f ? 1f - Mathf.SmoothStep(0f, 1f, beatPhase / 0.20f) : 0f;
-        worldCueCanvas.transform.localScale = Vector3.one * (0.006f * (1f + 0.55f * pop));
+        gameplayUI.FollowCurtain(curtainHome, cam, worldCueCloseupBlend, pop);
         if (worldCueText.text != icon) worldCueText.text = icon;
-        if (nextVisible && nextWorldCueCanvas != null)
-        {
-            nextWorldCueCanvas.transform.position = worldCueCanvas.transform.position
-                - cam.transform.right * 0.62f - cam.transform.up * 0.55f;
-            nextWorldCueCanvas.transform.rotation = worldCueCanvas.transform.rotation;
-            nextWorldCueCanvas.transform.localScale = Vector3.one * 0.0042f;
-            string nextIcon = CueIcon(PlanAction(curtainStep + 1));
-            if (nextWorldCueText.text != nextIcon) nextWorldCueText.text = nextIcon;
-        }
     }
 
     void UpdateGestureGuide()
     {
         if (gestureGuideRoot == null) return;
-        bool visible = mode == Mode.Closeup && stage == PrankStage.CurtainSequence
+        bool visible = developerHudVisible && mode == Mode.Closeup && stage == PrankStage.CurtainSequence
             && curtainStep < PlanCount && IsDirectionalAction(PlanAction(curtainStep));
         if (gestureGuideRoot.gameObject.activeSelf != visible) gestureGuideRoot.gameObject.SetActive(visible);
         if (!visible) return;
@@ -1142,6 +1172,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void BeginPrank()
     {
+        if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
         StartMotionSession();
         ResetEscapeProgress();
         SetDisplayedEscapeProgress(0);
@@ -1473,6 +1504,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ResetPrank()
     {
+        if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
         StartMotionSession();
         ResetEscapeProgress();
         SetDisplayedEscapeProgress(0);
@@ -1500,6 +1532,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void HandleDeveloperShortcuts()
     {
+        if (Input.GetKeyDown(KeyCode.F8)) SetDeveloperHudVisible(!developerHudVisible);
         if (mode != Mode.Closeup) return;
         if (Input.GetKeyDown(KeyCode.R)) ResetPrank();
         if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 3; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
@@ -1756,6 +1789,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ShowFeedback(string message, Color color)
     {
+        if (gameplayUI != null)
+            gameplayUI.ShowPlayerFeedback(message, color, Mathf.Min(0.38f, BeatDurationSeconds * 0.70f));
         if (feedback == null) return;
         feedback.text = message;
         feedback.color = color;
@@ -2053,26 +2088,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     GameObject MakeCircle(string name, Vector3 pos, float radius, Color color) { var go = GameObject.CreatePrimitive(PrimitiveType.Sphere); go.name = name; go.transform.position = pos; go.transform.localScale = Vector3.one * radius * 2f; SetColor(go, color); return go; }
     void SetColor(GameObject go, Color color) { var r = go.GetComponent<Renderer>(); r.material = new Material(Shader.Find("Unlit/Color")); r.material.color = color; }
     void SetLayerRecursive(GameObject go, int layer) { go.layer = layer; foreach (Transform child in go.transform) SetLayerRecursive(child.gameObject, layer); }
-    Sprite CreateEscapeRingSprite()
-    {
-        const int size = 128;
-        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        var pixels = new Color[size * size];
-        float center = (size - 1) * 0.5f;
-        for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
-        {
-            float dx = x - center, dy = y - center;
-            float radius = Mathf.Sqrt(dx * dx + dy * dy);
-            float rim = Mathf.Min(60f - radius, radius - 44f);
-            float gap = Mathf.Min(Mathf.Abs(dx), Mathf.Abs(dy)) - 1.5f;
-            float alpha = Mathf.SmoothStep(0f, 1f, Mathf.Min(rim, gap) / 1.5f);
-            pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
-        }
-        texture.SetPixels(pixels);
-        texture.Apply();
-        return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
-    }
-
     // Ring marker used by the screen-space drag guide.
     Sprite CreateRingSprite()
     {
