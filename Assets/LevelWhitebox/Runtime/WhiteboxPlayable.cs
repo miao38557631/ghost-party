@@ -10,6 +10,9 @@ namespace GhostParty.LevelWhitebox
         const string SecondFloor = "Assets/LevelWhitebox/Scenes/Level02_SecondFloor.unity";
         const float MoveSpeed = 4.5f;
         const float InteractionRange = 1.35f;
+        // Spawn offset from the Level01 curtain: in front of it, slightly to the right.
+        // Horizontal distance ~2.06 m so the player starts with some breathing room.
+        static readonly Vector3 CurtainSpawnOffset = new Vector3(1.9f, 0f, -0.8f);
 
         static bool arriveAtStair;
         Transform player;
@@ -47,7 +50,7 @@ namespace GhostParty.LevelWhitebox
 
             Vector3 spawn;
             if (!secondFloor && !arriveAtStair && curtainSpot != null)
-                spawn = curtainSpot.position + new Vector3(0.95f, 0f, -0.4f);
+                spawn = curtainSpot.position + CurtainSpawnOffset;
             else if (stair != null)
                 spawn = stair.position + new Vector3(0f, 0f, 1.25f);
             else
