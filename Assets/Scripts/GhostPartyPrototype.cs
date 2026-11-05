@@ -142,7 +142,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     Mode mode = Mode.Explore;
     PrankStage stage = PrankStage.CurtainSequence;
-    Transform ghost, curtain, guest, guestHead;
+    [SerializeField] Transform ghost;
+    Transform curtain, guest, guestHead;
     PrankNpcActor guestActor;
     Camera cam;
     Canvas canvas;
@@ -292,7 +293,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (!embeddedInLevel) return;
         cam = Camera.main;
-        var player = GameObject.Find("InvisibleGhost");
+        var player = ghost != null ? ghost.gameObject : GameObject.Find("InvisibleGhost");
         if (cam == null || player == null)
         {
             Debug.LogError("Level01 curtain prank needs the whitebox camera and ghost.");
@@ -531,8 +532,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         guestHeadHome = guestHead.position;
         guestHeadScaleHome = guestHead.localScale;
         guestScaleHome = guest.localScale;
-        ghost = GhostPlayerAvatar.Create(exploreGhostPos);
-        SetLayerRecursive(ghost.gameObject, 0);
+        if (ghost == null) ghost = GhostPlayerAvatar.Create(exploreGhostPos);
     }
     void BuildAudio()
     {
@@ -1119,8 +1119,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         UpdateCurtainInvitation();
         Vector3 input = GhostPlayerAvatar.ReadGroundInput();
-        ghost.position += input * moveSpeed * Time.deltaTime;
-        ghost.position = new Vector3(Mathf.Clamp(ghost.position.x, -6.6f, 6.6f), 0.38f, Mathf.Clamp(ghost.position.z, -3.0f, 3.7f));
+        var motor = ghost.GetComponent<GhostPlayerMotor>();
+        Vector3 desired = ghost.position + input * motor.MoveSpeed * Time.deltaTime;
+        desired.x = Mathf.Clamp(desired.x, -6.6f, 6.6f);
+        desired.z = Mathf.Clamp(desired.z, -3.0f, 3.7f);
+        motor.MoveDisplacement(desired - ghost.position);
+        GhostPlayerAvatar.SetMovement(ghost, input);
         Vector2 ghostFloor = new Vector2(ghost.position.x, ghost.position.z);
         Vector2 curtainFloor = new Vector2(curtain.position.x, curtain.position.z);
         if (Vector2.Distance(ghostFloor, curtainFloor) < interactionRange && (Input.GetKeyDown(KeyCode.E) || GameplayMousePressed())) BeginPrank();
@@ -1177,6 +1181,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         ResetEscapeProgress();
         SetDisplayedEscapeProgress(0);
         mode = Mode.Closeup; stage = PrankStage.CurtainSequence; stageStartedAt = Time.time; retryMessage = "";
+        GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
+        GhostPlayerAvatar.SetVisible(ghost, false);
         curtainStep = 0;
         approachStartedAt = -1f;
         renderedHudStep = -1;
@@ -1189,7 +1195,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         guest.position = guestHome;
         guest.rotation = Quaternion.identity;
         guest.localScale = guestScaleHome;
-        if (!embeddedInLevel) ghost.position = new Vector3(-2.7f, 0.2f, -1f);
+        // The possessed ghost stays at its collision-safe exploration position while Visual is hidden.
         vignette.color = new Color(0.05f, 0.02f, 0.12f, 0.35f);
         title.text = T("窗帘恶作剧 · 特写", "Curtain Prank · Close-up");
         ShowFeedback(T("进入特写", "Entering close-up"), new Color(0.55f, 0.95f, 1f));
@@ -1197,6 +1203,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void UpdateCloseup()
     {
+        GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         closeupPulse += Time.deltaTime;
         UpdateStageHud();
         if (stage == PrankStage.CurtainSequence) HandleCurtainSequence();
@@ -1475,7 +1482,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         motionFinishPending = motionSessionActive;
         ResetGestureState();
-        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain"); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); ghost.position = embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos;
+        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain"); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); GhostPlayerAvatar.Teleport(ghost, embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos);
+        GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
+        GhostPlayerAvatar.SetVisible(ghost, true);
         if (embeddedInLevel) canvas.enabled = false;
         if (embeddedInLevel && EmbeddedPrankFinished != null) EmbeddedPrankFinished();
         if (inputCueIcon != null) inputCueIcon.text = "";
@@ -1509,6 +1518,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         ResetEscapeProgress();
         SetDisplayedEscapeProgress(0);
         mode = Mode.Closeup;
+        GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
+        GhostPlayerAvatar.SetVisible(ghost, false);
         stage = PrankStage.CurtainSequence;
         renderedHudStep = -1;
         renderedCueStep = -1;

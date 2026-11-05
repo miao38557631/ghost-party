@@ -8,18 +8,17 @@ namespace GhostParty.LevelWhitebox
     {
         const string FirstFloor = "Assets/LevelWhitebox/Scenes/Level01_FirstFloor.unity";
         const string SecondFloor = "Assets/LevelWhitebox/Scenes/Level02_SecondFloor.unity";
-        const float MoveSpeed = 4.5f;
         const float InteractionRange = 1.35f;
         // Spawn offset from the Level01 curtain: in front of it, slightly to the right.
         // Horizontal distance ~2.06 m so the player starts with some breathing room.
         static readonly Vector3 CurtainSpawnOffset = new Vector3(1.9f, 0f, -0.8f);
 
         static bool arriveAtStair;
-        Transform player;
-        Transform stair;
-        Transform curtainSpot;
-        LevelCurtainEncounter curtainPrank;
-        Camera followCamera;
+        [SerializeField] Transform player;
+        [SerializeField] Transform stair;
+        [SerializeField] Transform curtainSpot;
+        [SerializeField] LevelCurtainEncounter curtainPrank;
+        [SerializeField] Camera followCamera;
         WhiteboxCamera cameraSettings;
         float floorLeftX;
         float floorRightX;
@@ -43,10 +42,10 @@ namespace GhostParty.LevelWhitebox
         {
             secondFloor = SceneManager.GetActiveScene().path == SecondFloor;
             var stairObject = GameObject.Find("stair");
-            stair = stairObject != null ? stairObject.transform : null;
+            if (stair == null) stair = stairObject != null ? stairObject.transform : null;
             var curtainObject = !secondFloor ? GameObject.Find("Curtain") : null;
-            curtainSpot = curtainObject != null ? curtainObject.transform : null;
-            curtainPrank = curtainObject != null ? curtainObject.GetComponent<LevelCurtainEncounter>() : null;
+            if (curtainSpot == null) curtainSpot = curtainObject != null ? curtainObject.transform : null;
+            if (curtainPrank == null) curtainPrank = curtainObject != null ? curtainObject.GetComponent<LevelCurtainEncounter>() : null;
 
             Vector3 spawn;
             if (!secondFloor && !arriveAtStair && curtainSpot != null)
@@ -56,10 +55,13 @@ namespace GhostParty.LevelWhitebox
             else
                 spawn = Vector3.zero;
             spawn.y = 0.38f;
+            if (player == null) player = GhostPlayerAvatar.Create(spawn);
+            if (player == null) { enabled = false; return; }
+            // Only floor transitions deliberately relocate; ordinary Play respects the saved scene instance.
+            if (arriveAtStair) GhostPlayerAvatar.Teleport(player, spawn);
             arriveAtStair = false;
-            player = GhostPlayerAvatar.Create(spawn);
 
-            followCamera = Camera.main;
+            if (followCamera == null) followCamera = Camera.main;
             if (followCamera == null)
             {
                 Debug.LogError("Whitebox floor has no MainCamera.");
@@ -82,8 +84,13 @@ namespace GhostParty.LevelWhitebox
         void Update()
         {
             if (player == null) return;
-            if (curtainPrank != null && curtainPrank.IsActive) return;
-            player.position += GhostPlayerAvatar.ReadGroundInput() * MoveSpeed * Time.deltaTime;
+            if (curtainPrank != null && curtainPrank.IsActive)
+            {
+                GhostPlayerAvatar.SetMovement(player, Vector3.zero);
+                return;
+            }
+            Vector3 movement = GhostPlayerAvatar.ReadGroundInput();
+            GhostPlayerAvatar.Move(player, movement, Time.deltaTime);
 
             if (!Input.GetKeyDown(KeyCode.E)) return;
             if (Near(stair))
