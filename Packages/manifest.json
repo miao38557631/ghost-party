@@ -1,9 +1,10 @@
 {
   "dependencies": {
-    "com.ibelongedtoyou.unity-mcp-2019": "file:UnityMcp2019",
     "cn.unity.uos.launcher": "https://cnb.cool/unity/uos/UOSLauncher.git",
+    "com.ibelongedtoyou.unity-mcp-2019": "file:UnityMcp2019",
     "com.unity.collab-proxy": "2.12.4",
     "com.unity.feature.development": "1.0.1",
+    "com.unity.formats.fbx": "4.2.1",
     "com.unity.inputsystem": "1.7.0",
     "com.unity.textmeshpro": "3.0.7",
     "com.unity.timeline": "1.7.7",

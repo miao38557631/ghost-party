@@ -7,12 +7,12 @@ using UnityEngine;
 [InitializeOnLoad]
 public static class NpcIdleAnimationSetup
 {
-    const string SourceFolder = "Assets/2DTexture/NPC1/idle";
+    const string SourceFolder = "Assets/2DTexture/NPC1/idle2";
     const string OutputFolder = "Assets/Resources/NPC1";
     const string ClipPath = OutputFolder + "/NPC1_Idle.anim";
     const string ControllerPath = OutputFolder + "/NPC1_Idle.controller";
-    const int FrameCount = 24;
-    const float FramesPerSecond = 12f;
+    const int FrameCount = 60;
+    const float FramesPerSecond = 28f;
     const float PixelsPerUnit = 750f;
 
     static NpcIdleAnimationSetup()
@@ -41,7 +41,7 @@ public static class NpcIdleAnimationSetup
         var sprites = new Sprite[FrameCount];
         for (int i = 0; i < FrameCount; i++)
         {
-            string path = SourceFolder + "/npc1_Idle_" + i.ToString("00") + ".png";
+            string path = SourceFolder + "/npc1Idle_" + i.ToString("00") + ".png";
             var importer = AssetImporter.GetAtPath(path) as TextureImporter;
             if (importer == null)
             {
@@ -78,7 +78,7 @@ public static class NpcIdleAnimationSetup
         var keys = new ObjectReferenceKeyframe[FrameCount + 1];
         for (int i = 0; i < FrameCount; i++)
             keys[i] = new ObjectReferenceKeyframe { time = i / FramesPerSecond, value = sprites[i] };
-        // First pose at the end makes the loop exactly two seconds long.
+        // First pose at the end makes the loop exactly FrameCount / FramesPerSecond seconds long.
         keys[FrameCount] = new ObjectReferenceKeyframe { time = FrameCount / FramesPerSecond, value = sprites[0] };
         AnimationUtility.SetObjectReferenceCurve(clip,
             EditorCurveBinding.PPtrCurve("", typeof(SpriteRenderer), "m_Sprite"), keys);
@@ -98,6 +98,6 @@ public static class NpcIdleAnimationSetup
         machine.defaultState = state;
         EditorUtility.SetDirty(controller);
         AssetDatabase.SaveAssets();
-        Debug.Log("NPC1 idle ready: 24 sprites at 12 FPS, two-second looping clip and controller.");
+        Debug.Log($"NPC1 idle ready: {FrameCount} sprites at {FramesPerSecond} FPS, {FrameCount / FramesPerSecond:0.###}-second looping clip and controller.");
     }
 }
