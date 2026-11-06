@@ -18,10 +18,11 @@ namespace GhostParty.LevelWhitebox
         }
 
         public bool IsActive { get { return prank != null && prank.IsEmbeddedPrankActive; } }
+        public bool CanStart { get { return isActiveAndEnabled && prank != null && prank.CanStartEmbeddedPrank; } }
 
         public void TryStart()
         {
-            if (prank == null) return;
+            if (!CanStart) return;
             prank.StartEmbeddedPrank();
             if (prank.IsEmbeddedPrankActive && cameraRig != null) cameraRig.EnterCloseup(transform);
         }

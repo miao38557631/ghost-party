@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using GhostParty.LevelWhitebox;
 
 /// <summary>
@@ -140,6 +141,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [SerializeField, Range(0.02f, 0.20f)] float curtainGestureThreshold = 0.035f;
     [SerializeField, Range(0.02f, 0.20f)] float easyGestureThreshold = 0.022f;
 
+    Gamepad gestureGamepad;
+    int observedInputRevision = -1;
+    bool inputWasSuspended;
+
     Mode mode = Mode.Explore;
     PrankStage stage = PrankStage.CurtainSequence;
     [SerializeField] Transform ghost;
@@ -147,6 +152,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     PrankNpcActor guestActor;
     Camera cam;
     Canvas canvas;
+    GameObject embeddedHudContent;
+    CurtainPossessionPrompt possessionPrompt;
     Text prompt, inputCueIcon, status, title, actionHint, progressText, feedback, languageButtonText, difficultyButtonText;
     Button languageButton, difficultyButton;
     Text beatAssistButtonText;
@@ -323,26 +330,41 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         BuildAudio();
         BuildHud();
         SetExplorePrompt();
-        canvas.enabled = false;
+        SetEmbeddedHudVisible(false);
         embeddedReady = true;
     }
 
     public bool IsEmbeddedPrankActive { get { return embeddedInLevel && embeddedReady && mode == Mode.Closeup; } }
+    public bool CanStartEmbeddedPrank { get { return isActiveAndEnabled && embeddedInLevel && embeddedReady && mode == Mode.Explore; } }
 
     public void StartEmbeddedPrank()
     {
-        if (!embeddedInLevel || !embeddedReady || mode != Mode.Explore) return;
+        if (!CanStartEmbeddedPrank) return;
         embeddedGhostReturnPosition = ghost.position;
-        canvas.enabled = true;
+        SetEmbeddedHudVisible(true);
         BeginPrank();
     }
 
     void Update()
     {
         if (embeddedInLevel && !embeddedReady) return;
+        if (GhostInput.Suspended)
+        {
+            if (!inputWasSuspended) ResetGestureState();
+            inputWasSuspended = true;
+            return;
+        }
+        inputWasSuspended = false;
+        if (observedInputRevision != GhostInput.DeviceRevision)
+        {
+            observedInputRevision = GhostInput.DeviceRevision;
+            curtainHeld = gestureArmed = gestureStartCaptured = cameraGestureStarted = false;
+            gestureGamepad = null;
+            renderedCueStep = renderedHudStep = -1;
+        }
         long diagnosticStart = System.Diagnostics.Stopwatch.GetTimestamp();
         motionEvents = 0;
-        if (Input.GetKeyDown(KeyCode.F9))
+        if (GhostInput.KeyDown(KeyCode.F9))
         {
             if (motionDiagnosticsEnabled) FinishMotionSession();
             motionDiagnosticsEnabled = !motionDiagnosticsEnabled;
@@ -357,13 +379,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         }
         if (motionDiagnosticsEnabled)
         {
-            if (Input.GetMouseButtonDown(0)) motionEvents |= (int)MotionEvent.Press;
-            if (Input.GetMouseButtonUp(0)) motionEvents |= (int)MotionEvent.Release;
+            if (GhostInput.MouseDown(0)) motionEvents |= (int)MotionEvent.Press;
+            if (GhostInput.MouseUp(0)) motionEvents |= (int)MotionEvent.Release;
         }
         if (beatClock != null) beatClock.Tick();
         UpdateFeedback();
         UpdateBeatCue();
-        if (Input.GetKeyDown(KeyCode.L)) ToggleLanguage();
+        if (GhostInput.KeyDown(KeyCode.L)) ToggleLanguage();
         HandleDeveloperShortcuts();
         if (mode == Mode.Explore) { if (embeddedInLevel) UpdateEmbeddedExplore(); else UpdateExplore(); }
         else UpdateCloseup();
@@ -395,7 +417,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (!motionSessionActive && mode == Mode.Closeup) StartMotionSession();
         if (!motionSessionActive) return;
         if (motionFinishPending) motionEvents |= (int)MotionEvent.SessionEnd;
-        Vector3 mouse = Input.mousePosition;
+        Vector3 mouse = GhostInput.MousePosition;
         motionSamples[motionWriteIndex] = new MotionSample
         {
             frame = Time.frameCount, time = Time.unscaledTime,
@@ -486,6 +508,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void OnDisable()
     {
+        GhostInput.StopHaptics();
         RhythmAccent.ClearClock();
         // Stopping Play mode or disabling the component preserves a partial round.
         FinishMotionSession();
@@ -670,6 +693,30 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         vignette.rectTransform.offsetMin = vignette.rectTransform.offsetMax = Vector2.zero;
         vignette.transform.SetAsFirstSibling();
         SetDeveloperHudVisible(developerHudVisible);
+        if (embeddedInLevel)
+        {
+            // Keep the existing overlay Canvas alive for exploration prompts. Only
+            // its original prank content is hidden while exploring.
+            embeddedHudContent = new GameObject("PrankHudContent", typeof(RectTransform));
+            var contentRect = (RectTransform)embeddedHudContent.transform;
+            contentRect.SetParent(canvas.transform, false);
+            contentRect.anchorMin = Vector2.zero;
+            contentRect.anchorMax = Vector2.one;
+            contentRect.offsetMin = contentRect.offsetMax = Vector2.zero;
+            for (int i = canvas.transform.childCount - 1; i >= 0; i--)
+            {
+                var child = canvas.transform.GetChild(i);
+                if (child != contentRect) { child.SetParent(contentRect, false); child.SetAsFirstSibling(); }
+            }
+            possessionPrompt = GetComponent<CurtainPossessionPrompt>();
+            if (possessionPrompt != null) possessionPrompt.Bind(canvas, cam);
+        }
+    }
+
+    void SetEmbeddedHudVisible(bool visible)
+    {
+        if (embeddedHudContent != null) embeddedHudContent.SetActive(visible);
+        if (visible && possessionPrompt != null) possessionPrompt.Hide();
     }
 
     void BuildWorldCue()
@@ -750,8 +797,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (mode != Mode.Closeup)
         {
             cue.kind = CurtainGameplayUI.CueKind.Automatic;
-            cue.instruction = T("靠近窗帘，按 E 开始", "Press E near the curtain");
-            cue.timing = T("WASD 移动", "WASD to move");
+            cue.instruction = GhostInput.UsingGamepad ? T("靠近窗帘，按 A 附身", "Press A near the curtain") : T("靠近窗帘，按 E 开始", "Press E near the curtain");
+            cue.timing = GhostInput.UsingGamepad ? T("左摇杆移动", "Left stick to move") : T("WASD 移动", "WASD to move");
             gameplayUI.PresentPlayerCue(!embeddedInLevel, cue, cam, curtainHome);
             return;
         }
@@ -771,11 +818,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         cue.armed = gestureArmed;
         cue.recovering = gestureRetryPending && Time.time < gestureRetryReadyAt;
         cue.motionReady = gestureStartCaptured;
-        cue.icon = action == CurtainAction.Tap ? T("点", "LMB") : CueIcon(action);
+        cue.icon = PlayerControlIcon(action);
         cue.nextLabel = T("下一步", "NEXT");
         // Only preview the adjacent operation. Never skip over an automatic stage.
         if (!IsAutomaticAction(action) && curtainStep + 1 < PlanCount && !IsAutomaticAction(PlanAction(curtainStep + 1)))
-            cue.nextIcon = PlanAction(curtainStep + 1) == CurtainAction.Tap ? T("点", "LMB") : CueIcon(PlanAction(curtainStep + 1));
+            cue.nextIcon = PlayerControlIcon(PlanAction(curtainStep + 1));
 
         if (IsAutomaticAction(action))
         {
@@ -783,20 +830,22 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             cue.instruction = action == CurtainAction.AutoApproach ? T("等客人走近", "Let the guest approach")
                 : action == CurtainAction.AutoLift ? T("窗帘正在抬起", "The curtain is lifting") : T("窗帘正在收紧", "The curtain is tightening");
             cue.timing = action == CurtainAction.AutoWrapComplete
-                ? T("自动演出 · 可以松开鼠标", "Automatic · you may release the mouse")
+                ? (GhostInput.UsingGamepad ? T("自动演出 · 可以松开 RT", "Automatic · you may release RT") : T("自动演出 · 可以松开鼠标", "Automatic · you may release the mouse"))
                 : T("自动演出 · 不用操作", "Automatic · no input needed");
         }
         else if (action == CurtainAction.Tap)
         {
             cue.kind = CurtainGameplayUI.CueKind.Tap;
-            cue.instruction = T("点一下左键", "Tap the left mouse button");
+            cue.instruction = GhostInput.UsingGamepad
+                ? (GhostInput.TapNeedsRelease ? T("先松开 A，再点按", "Release A, then tap") : T("点按 A", "Tap A"))
+                : T("点一下左键", "Tap the left mouse button");
             cue.timing = Mathf.Abs(cue.beatsToTarget) <= cue.tolerance
                 ? T("现在点！", "TAP NOW!") : T("等外圈合拢", "Wait for the rings to meet");
         }
         else if (action == CurtainAction.Hold)
         {
             cue.kind = CurtainGameplayUI.CueKind.Hold;
-            cue.instruction = T("继续按住，别松手", "Keep holding · do not release");
+            cue.instruction = GhostInput.UsingGamepad ? T("继续按住 RT，别松手", "Keep holding RT · do not release") : T("继续按住，别松手", "Keep holding · do not release");
             cue.timing = T("保持到下一拍", "Hold through the next beat");
         }
         else
@@ -804,7 +853,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             cue.kind = CurtainGameplayUI.CueKind.Direction;
             cue.instruction = PlayerDirectionInstruction(action);
             cue.motionProgress = ReadGestureProgress(action);
-            cue.timing = !cue.held ? (Input.GetMouseButton(0)
+            cue.timing = GhostInput.UsingGamepad
+                ? (!cue.held ? T("先按住 RT", "Hold RT first")
+                    : gestureArmed ? T("到位了 · 保持 RT 等拍点", "Ready · hold RT for the beat")
+                    : gestureStartCaptured ? T("按箭头推动左摇杆", "Push the left stick along the arrow")
+                    : T("保持 RT · 等拍圈亮起再推动摇杆", "Hold RT · move the stick when the ring lights up"))
+                : !cue.held ? (GhostInput.MouseHeld(0)
                     ? T("先松开，再按住左键", "Release, then hold the mouse button")
                     : T("先按住左键", "Hold the left mouse button first"))
                 : gestureArmed ? T("到位了 · 按住等拍点", "Ready · keep holding for the beat")
@@ -812,11 +866,34 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 : T("保持按住 · 等拍圈亮起再滑动", "Keep holding · swipe when the ring lights up");
         }
         if (cue.recovering) cue.timing = T("回位中 · 稍等一拍", "Recovering · wait one beat");
+        cue.timing += GhostInput.UsingGamepad ? T("  ·  B 退出", "  ·  B to exit") : T("  ·  Esc 退出", "  ·  Esc to exit");
         gameplayUI.PresentPlayerCue(true, cue, cam, curtainHome);
+    }
+
+    string PlayerControlIcon(CurtainAction action)
+    {
+        if (!GhostInput.UsingGamepad) return action == CurtainAction.Tap ? T("点", "LMB") : CueIcon(action);
+        if (action == CurtainAction.Tap) return "A";
+        if (action == CurtainAction.Hold) return "RT";
+        return IsDirectionalAction(action) ? "RT " + CueIcon(action) : "";
+    }
+
+    string ExploreControls()
+    {
+        return GhostInput.UsingGamepad ? T("移动：左摇杆\n附身：靠近窗帘后按 A", "Move: Left stick\nPossess: A near the curtain")
+            : T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain");
     }
 
     string PlayerDirectionInstruction(CurtainAction action)
     {
+        if (GhostInput.UsingGamepad)
+        {
+            string direction = action == CurtainAction.DragDown ? T("向下", "down")
+                : action == CurtainAction.SwipeLeft ? T("向左", "left")
+                : action == CurtainAction.WindLeft ? T("向左下", "lower-left")
+                : action == CurtainAction.ThrowRightRelease ? T("向右上", "upper-right") : T("向右", "right");
+            return T("按住 RT，左摇杆", "Hold RT · left stick ") + direction;
+        }
         switch (action)
         {
             case CurtainAction.DragRight:
@@ -832,7 +909,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (gestureArmed) return 1f;
         if (!curtainHeld || !gestureStartCaptured) return 0f;
-        Vector3 delta = Input.mousePosition - gestureStart;
+        Vector3 delta = GhostInput.MousePosition - gestureStart;
+        if (GhostInput.UsingGamepad)
+        {
+            var pad = GhostInput.ActiveGamepad;
+            var stick = pad == null ? Vector2.zero : pad.leftStick.ReadValue();
+            delta = new Vector3(stick.x * GestureThreshold * Screen.width / 0.55f,
+                stick.y * GestureThreshold * Screen.height / 0.55f, 0f);
+        }
         float x = delta.x / Mathf.Max(1f, GestureThreshold * Screen.width);
         float y = delta.y / Mathf.Max(1f, GestureThreshold * Screen.height);
         switch (action)
@@ -935,6 +1019,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void EscapeCurtain()
     {
+        GhostInput.StopHaptics();
         guestLaunchOrigin = guest.position;
         guestLaunchRotation = guest.rotation;
         guestLaunchScale = guest.localScale;
@@ -1032,7 +1117,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         arrowRect.localRotation = Quaternion.identity;
         gestureGuideArrow.text = GestureGuideArrow(action);
         arrowRect.sizeDelta = new Vector2(44f, 44f);
-        gestureGuideStartText.text = T("左键按住", "HOLD LMB");
+        gestureGuideStartText.text = GhostInput.UsingGamepad ? T("RT 按住", "HOLD RT") : T("左键按住", "HOLD LMB");
         gestureGuideTargetText.text = action == CurtainAction.ThrowRightRelease
             ? T("到这里松开", "RELEASE HERE") : T("拖到这里", "DRAG TO");
         // Keep labels close to their rings, while leaving the arrow corridor
@@ -1127,7 +1212,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         GhostPlayerAvatar.SetMovement(ghost, input);
         Vector2 ghostFloor = new Vector2(ghost.position.x, ghost.position.z);
         Vector2 curtainFloor = new Vector2(curtain.position.x, curtain.position.z);
-        if (Vector2.Distance(ghostFloor, curtainFloor) < interactionRange && (Input.GetKeyDown(KeyCode.E) || GameplayMousePressed())) BeginPrank();
+        if (Vector2.Distance(ghostFloor, curtainFloor) < interactionRange && (GhostInput.InteractPressed || GameplayMousePressed())) BeginPrank();
         if (guestLeaveAt > 0 && Time.time > guestLeaveAt) { guest.position = Vector3.MoveTowards(guest.position, new Vector3(8f, guest.position.y, guest.position.z), Time.deltaTime * 2.5f); }
         if (guestHead != null) guestHead.position = guest.position + new Vector3(0, 0.88f, 0);
         if (guest.position.x > 7.5f)
@@ -1139,7 +1224,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             guestLeaveAt = -1;
         }
         title.text = T("客厅 · 探索", "Living Room · Explore");
-        actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain");
+        actionHint.text = ExploreControls();
         progressText.text = T("当前目标：找到窗帘和客人", "Objective: find the curtain and guest");
         status.text = T("靠近右侧窗帘开始恶作剧", "Approach the curtain to start the prank");
     }
@@ -1176,6 +1261,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void BeginPrank()
     {
+        GhostInput.BeginPossession();
         if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
         StartMotionSession();
         ResetEscapeProgress();
@@ -1203,13 +1289,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void UpdateCloseup()
     {
+        if (GhostInput.CancelPressed) { ReturnToExplore(); return; }
         GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         closeupPulse += Time.deltaTime;
         UpdateStageHud();
         if (stage == PrankStage.CurtainSequence) HandleCurtainSequence();
         else if ((stage == PrankStage.Complete || stage == PrankStage.Escaped) && Time.time - stageStartedAt > 1.8f) ReturnToExplore();
         UpdatePrankVisuals();
-        if (Input.GetKeyDown(KeyCode.Escape)) ReturnToExplore();
     }
 
     void HandleCurtainSequence()
@@ -1217,6 +1303,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (curtainStep >= PlanCount) { CompletePrank(); return; }
         CurtainAction action = PlanAction(curtainStep);
         UpdateCurtainCue(action);
+        // RT release invalidates the prepared action before checking the beat.
+        if (gestureGamepad != null && !GhostInput.GripHeld)
+        {
+            curtainHeld = gestureArmed = gestureStartCaptured = cameraGestureStarted = false;
+        }
 
         if (action == CurtainAction.Hold)
         {
@@ -1229,9 +1320,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 gestureRetryPending = false;
                 curtainTargetBeat = Math.Max(curtainTargetBeat, Math.Floor(beatClock.BeatIndex) + 1.0);
             }
-            bool holdInput = curtainHeld && (Input.GetMouseButton(0) || Input.GetKey(KeyCode.Space) ||
-                Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.W));
-            if (!holdInput || Input.GetMouseButtonUp(0))
+            bool holdInput = curtainHeld && (gestureGamepad != null ? GhostInput.GripHeld :
+                (GhostInput.MouseHeld(0) || GhostInput.Key(KeyCode.Space) || GhostInput.Key(KeyCode.A) ||
+                 GhostInput.Key(KeyCode.D) || GhostInput.Key(KeyCode.S) || GhostInput.Key(KeyCode.W)));
+            if (!holdInput || (gestureGamepad == null && GhostInput.MouseUp(0)))
             {
                 FailHoldAndRestartWind();
                 return;
@@ -1260,13 +1352,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             return;
         }
 
-        bool mousePressed = GameplayMousePressed();
+        bool gamepadGesture = GhostInput.UsingGamepad;
+        bool mousePressed = !gamepadGesture && GameplayMousePressed();
         if (mousePressed)
         {
             // Every gesture is measured from this press position, never from a
             // world-space curtain point or a previous mouse position.
             curtainHeld = true;
-            gestureStart = Input.mousePosition;
+            gestureStart = GhostInput.MousePosition;
             gestureArmed = false;
             cameraGestureStarted = false;
         }
@@ -1285,29 +1378,39 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (directional && !gestureStartCaptured &&
             beatClock.BeatIndex >= curtainTargetBeat - gestureStartLeadBeats)
         {
-            gestureStart = Input.mousePosition;
+            gestureStart = GhostInput.MousePosition;
             gestureStartCaptured = true;
             gestureArmed = false;
         }
         bool gestureInputReady = !directional || gestureStartCaptured;
-        Vector3 delta = Input.mousePosition - gestureStart;
+        Vector3 delta = GhostInput.MousePosition - gestureStart;
         float xThreshold = GestureThreshold * Screen.width;
         float yThreshold = GestureThreshold * Screen.height;
-        bool left = Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A);
-        bool right = Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D);
-        bool down = Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.S);
-        bool leftHeld = Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A);
-        bool rightHeld = Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D);
-        bool downHeld = Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S);
-        bool upHeld = Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W);
-        bool keyboardHeld = leftHeld || rightHeld || downHeld || upHeld || Input.GetKey(KeyCode.Space);
-        if (IsDirectionalAction(action) && keyboardHeld) curtainHeld = true;
+        bool left = GhostInput.KeyDown(KeyCode.LeftArrow) || GhostInput.KeyDown(KeyCode.A);
+        bool right = GhostInput.KeyDown(KeyCode.RightArrow) || GhostInput.KeyDown(KeyCode.D);
+        bool down = GhostInput.KeyDown(KeyCode.DownArrow) || GhostInput.KeyDown(KeyCode.S);
+        bool leftHeld = GhostInput.Key(KeyCode.LeftArrow) || GhostInput.Key(KeyCode.A);
+        bool rightHeld = GhostInput.Key(KeyCode.RightArrow) || GhostInput.Key(KeyCode.D);
+        bool downHeld = GhostInput.Key(KeyCode.DownArrow) || GhostInput.Key(KeyCode.S);
+        bool upHeld = GhostInput.Key(KeyCode.UpArrow) || GhostInput.Key(KeyCode.W);
+        bool keyboardHeld = leftHeld || rightHeld || downHeld || upHeld || GhostInput.Key(KeyCode.Space);
+        if (directional && gamepadGesture)
+        {
+            curtainHeld = GhostInput.GripHeld;
+            gestureGamepad = GhostInput.ActiveGamepad;
+            if (!curtainHeld) gestureArmed = false;
+        }
+        else if (directional && keyboardHeld) { curtainHeld = true; gestureGamepad = null; }
+        Vector2 stickDirection;
+        // The stick produces directional edges, not a virtual mouse or a second rhythm judgement.
+        bool padDirection = gamepadGesture && gestureInputReady && GhostInput.TryConsumeDirection(out stickDirection) &&
+            HasReachedGestureDistance(action, new Vector3(stickDirection.x, stickDirection.y, 0f), 0.55f, 0.55f);
+        bool keyboardDirection = !gamepadGesture && IsKeyboardGesture(action, left, right, down, leftHeld, rightHeld, downHeld, upHeld);
 
         // Visual response starts with the drag, independently of rhythm judgement.
         // A tiny pixel dead zone prevents a stationary click from starting a pan.
         if (gestureInputReady && curtainHeld && IsDirectionalAction(action) && !cameraGestureStarted &&
-            (HasReachedGestureDistance(action, delta, 4f, 4f) ||
-             IsKeyboardGesture(action, left, right, down, leftHeld, rightHeld, downHeld, upHeld)))
+            (padDirection || (!gamepadGesture && HasReachedGestureDistance(action, delta, 4f, 4f)) || keyboardDirection))
         {
             cameraPanAction = action;
             cameraPanStartedAt = Time.time;
@@ -1316,11 +1419,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             motionEvents |= (int)MotionEvent.PanStart;
         }
 
-        if (action == CurtainAction.Tap && (mousePressed || Input.GetKeyDown(KeyCode.Space)))
+        bool padTap = GhostInput.GamepadTapPressed;
+        if (action == CurtainAction.Tap && (padTap || mousePressed || GhostInput.KeyDown(KeyCode.Space)))
+        {
+            gestureGamepad = padTap ? GhostInput.ActiveGamepad : null;
             TryCurtainAction();
-        else if (gestureInputReady && curtainHeld && IsDirectionalAction(action) &&
-                 (HasReachedGestureDistance(action, delta, xThreshold, yThreshold) ||
-                  IsKeyboardGesture(action, left, right, down, leftHeld, rightHeld, downHeld, upHeld)))
+        }
+        else if (gestureInputReady && curtainHeld && directional &&
+                 (padDirection || (!gamepadGesture && HasReachedGestureDistance(action, delta, xThreshold, yThreshold)) || keyboardDirection))
         {
             // Direction and distance can be prepared before the beat. Once
             // armed, simply holding through the bright beat completes it.
@@ -1338,7 +1444,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         // Do not process its expired beat again or overwrite the escape feedback.
         if (stage != PrankStage.CurtainSequence) return;
 
-        if (Input.GetMouseButtonUp(0))
+        if ((!gamepadGesture && GhostInput.MouseUp(0)) || (gamepadGesture && GhostInput.GripReleased))
         {
             if (cameraGestureStarted) TriggerCameraFailure();
             curtainHeld = false;
@@ -1381,12 +1487,17 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             retryMessage = "";
             ShowFeedback(T("卡点！", "ON BEAT!"), new Color(1f, 0.84f, 0.3f));
             lastPerformedAction = PlanAction(curtainStep);
+            if (lastPerformedAction == CurtainAction.Tap) GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.WindowTap);
+            else if (lastPerformedAction == CurtainAction.SwipeLeft || lastPerformedAction == CurtainAction.SwipeRight)
+                GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.CurtainHit);
+            else if (lastPerformedAction == CurtainAction.ThrowRightRelease)
+                GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.FinalThrow);
             actionImpactUntil = Time.time + 0.24f;
             TriggerCameraImpact(lastPerformedAction);
             if (keepHolding)
             {
                 gestureStartCaptured = false;
-                gestureStart = Input.mousePosition;
+                gestureStart = GhostInput.MousePosition;
             }
             gestureArmed = false;
             cameraGestureStarted = false;
@@ -1480,12 +1591,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ReturnToExplore()
     {
+        GhostInput.StopHaptics();
         motionFinishPending = motionSessionActive;
         ResetGestureState();
-        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = T("移动：WASD / 方向键\n互动：靠近窗帘后按 E", "Move: WASD / Arrow Keys\nInteract: press E near the curtain"); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); GhostPlayerAvatar.Teleport(ghost, embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos);
+        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = ExploreControls(); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); GhostPlayerAvatar.Teleport(ghost, embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos);
         GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         GhostPlayerAvatar.SetVisible(ghost, true);
-        if (embeddedInLevel) canvas.enabled = false;
+        if (embeddedInLevel) SetEmbeddedHudVisible(false);
         if (embeddedInLevel && EmbeddedPrankFinished != null) EmbeddedPrankFinished();
         if (inputCueIcon != null) inputCueIcon.text = "";
         if (guestHead != null) guestHead.localScale = guestHeadScaleHome;
@@ -1493,6 +1605,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ResetGestureState()
     {
+        gestureGamepad = null;
         gestureStart = Vector3.zero;
         curtainHeld = false;
         gestureArmed = false;
@@ -1513,6 +1626,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ResetPrank()
     {
+        GhostInput.StopHaptics();
         if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
         StartMotionSession();
         ResetEscapeProgress();
@@ -1543,12 +1657,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void HandleDeveloperShortcuts()
     {
-        if (Input.GetKeyDown(KeyCode.F8)) SetDeveloperHudVisible(!developerHudVisible);
+        if (GhostInput.KeyDown(KeyCode.F8)) SetDeveloperHudVisible(!developerHudVisible);
         if (mode != Mode.Closeup) return;
-        if (Input.GetKeyDown(KeyCode.R)) ResetPrank();
-        if (Input.GetKeyDown(KeyCode.F2)) { curtainStep = 3; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F3)) { curtainStep = 6; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
-        if (Input.GetKeyDown(KeyCode.F4)) { curtainStep = 14; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (GhostInput.KeyDown(KeyCode.R)) ResetPrank();
+        if (GhostInput.KeyDown(KeyCode.F2)) { curtainStep = 3; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (GhostInput.KeyDown(KeyCode.F3)) { curtainStep = 6; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
+        if (GhostInput.KeyDown(KeyCode.F4)) { curtainStep = 14; curtainTargetBeat = beatClock.NextWholeBeat(1); ResetGestureState(); }
     }
 
     void UpdatePrankVisuals()
@@ -1714,7 +1828,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         {
             case PrankStage.CurtainSequence:
                 title.text = T("窗帘恶作剧 · 节拍操作", "Curtain Prank · Beat Actions");
-                actionHint.text = T("所有手动操作都要落在亮拍；按住左键，从红色起点圆拖到黄色目标圆", "Manual actions land on the bright beat; hold left mouse and drag from the red start ring to the yellow target ring");
+                actionHint.text = GhostInput.UsingGamepad ? T("A 点按；按住 RT 配合左摇杆；B 退出", "A: tap; RT + left stick: direction; B: exit") : T("所有手动操作都要落在亮拍；按住左键，按箭头方向滑动", "Manual actions land on the bright beat; hold LMB and swipe with the arrow");
                 progressText.text = CurrentAction == CurtainAction.AutoApproach
                     ? T("过场：客人靠近（不计拍）", "Transition: guest approaches (unmetered)")
                     : T("流程拍位　", "Beat progress　") + CurrentPlanBeatNumber() + "/" + TotalPlanBeats;
@@ -1759,6 +1873,13 @@ public sealed class GhostPartyPrototype : MonoBehaviour
                 case CurtainAction.WindLeft: icon = "↙"; instruction = T("保持按住，向左下蓄力", "KEEP HOLDING + WIND LOWER-LEFT"); break;
                 case CurtainAction.Hold: icon = "-"; instruction = T("保持按住，维持蓄力", "KEEP HOLDING THE WIND-UP"); break;
                 default: icon = "↗"; instruction = T("保持按住，向右上甩出后松开", "KEEP HOLDING + SWIPE UPPER-RIGHT, THEN RELEASE"); break;
+            }
+            if (GhostInput.UsingGamepad)
+            {
+                icon = PlayerControlIcon(action);
+                if (IsDirectionalAction(action)) instruction = PlayerDirectionInstruction(action);
+                else if (action == CurtainAction.Tap) instruction = T("点按 A", "TAP A");
+                else if (action == CurtainAction.Hold) instruction = T("保持 RT，维持蓄力", "KEEP HOLDING RT");
             }
             if (inputCueIcon != null) inputCueIcon.text = icon;
             prompt.text = action == CurtainAction.AutoApproach ? instruction
@@ -1901,8 +2022,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     bool GameplayMousePressed()
     {
-        return Input.GetMouseButtonDown(0) &&
-            (EventSystem.current == null || !EventSystem.current.IsPointerOverGameObject());
+        if (!GhostInput.MouseDown(0)) return false;
+        if (EventSystem.current == null) return true;
+        // Both keeps the legacy UI module. Raycast the actual Input System pointer,
+        // rather than its cached legacy pointer (which may belong to another mouse).
+        var pointer = new PointerEventData(EventSystem.current) { position = GhostInput.MousePosition };
+        var hits = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(pointer, hits);
+        return hits.Count == 0;
     }
 
     string BeatAssistLabel() { return T("节拍辅助：", "Beat assist: ") + (beatAssistEnabled ? T("开", "ON") : T("关", "OFF")); }
@@ -2066,7 +2193,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         bool hadCameraGesture = cameraGestureStarted;
         // Every failure path clears gameplay state, even if no camera pan started.
         gestureArmed = false;
-        gestureStart = Input.mousePosition;
+        gestureStart = GhostInput.MousePosition;
         cameraGestureStarted = false;
         bool directionalRetry = stage == PrankStage.CurtainSequence && curtainStep < PlanCount
             && IsDirectionalAction(PlanAction(curtainStep));

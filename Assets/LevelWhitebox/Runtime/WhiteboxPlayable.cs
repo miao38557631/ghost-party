@@ -24,6 +24,24 @@ namespace GhostParty.LevelWhitebox
         float floorRightX;
         bool secondFloor;
 
+        // Both the prompt and E/A resolve this same target, including stair priority.
+        public Transform CurrentInteractionTarget
+        {
+            get
+            {
+                if (!isActiveAndEnabled || player == null || GhostInput.Suspended ||
+                    (curtainPrank != null && curtainPrank.IsActive)) return null;
+                if (Near(stair)) return stair;
+                if (!secondFloor && curtainPrank != null && curtainPrank.CanStart && Near(curtainSpot)) return curtainSpot;
+                return null;
+            }
+        }
+
+        public bool IsCurrentPossessionTarget(LevelCurtainEncounter encounter)
+        {
+            return curtainSpot != null && encounter != null && encounter == curtainPrank && CurrentInteractionTarget == curtainSpot;
+        }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void RegisterSceneLoads()
         {
@@ -83,7 +101,7 @@ namespace GhostParty.LevelWhitebox
 
         void Update()
         {
-            if (player == null) return;
+            if (player == null || GhostInput.Suspended) return;
             if (curtainPrank != null && curtainPrank.IsActive)
             {
                 GhostPlayerAvatar.SetMovement(player, Vector3.zero);
@@ -92,13 +110,15 @@ namespace GhostParty.LevelWhitebox
             Vector3 movement = GhostPlayerAvatar.ReadGroundInput();
             GhostPlayerAvatar.Move(player, movement, Time.deltaTime);
 
-            if (!Input.GetKeyDown(KeyCode.E)) return;
-            if (Near(stair))
+            if (!GhostInput.InteractPressed) return;
+            Transform target = CurrentInteractionTarget;
+            if (target == null) return;
+            if (target == stair)
             {
                 arriveAtStair = true;
                 SceneManager.LoadScene(secondFloor ? FirstFloor : SecondFloor);
             }
-            else if (!secondFloor && Near(curtainSpot) && curtainPrank != null)
+            else if (target == curtainSpot)
                 curtainPrank.TryStart();
         }
 
@@ -120,7 +140,7 @@ namespace GhostParty.LevelWhitebox
 
         bool Near(Transform marker)
         {
-            if (marker == null || player == null) return false;
+            if (marker == null || !marker.gameObject.activeInHierarchy || player == null) return false;
             Vector2 a = new Vector2(player.position.x, player.position.z);
             Vector2 b = new Vector2(marker.position.x, marker.position.z);
             return Vector2.Distance(a, b) <= InteractionRange;
@@ -130,9 +150,11 @@ namespace GhostParty.LevelWhitebox
         {
             if (player == null) return;
             if (curtainPrank != null && curtainPrank.IsActive) return;
-            string prompt = secondFloor ? "2F  |  WASD: move" : "1F  |  WASD: move";
-            if (Near(stair)) prompt += secondFloor ? "  |  E: go downstairs" : "  |  E: go upstairs";
-            else if (Near(curtainSpot)) prompt += "  |  E: curtain prank";
+            bool gamepad = GhostInput.UsingGamepad;
+            string action = gamepad ? "A" : "E";
+            string prompt = (secondFloor ? "2F" : "1F") + (gamepad ? "  |  Left stick: move" : "  |  WASD: move");
+            if (CurrentInteractionTarget == stair && stair != null)
+                prompt += "  |  " + action + (secondFloor ? ": go downstairs" : ": go upstairs");
             var style = new GUIStyle(GUI.skin.box)
             {
                 fontSize = 16,

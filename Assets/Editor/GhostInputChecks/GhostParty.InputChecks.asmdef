@@ -1,0 +1,6 @@
+{
+  "name": "GhostParty.InputChecks",
+  "references": ["Unity.InputSystem", "Unity.ugui"],
+  "includePlatforms": ["Editor"],
+  "allowUnsafeCode": true
+}

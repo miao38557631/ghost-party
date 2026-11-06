@@ -56,7 +56,6 @@ public static class GhostPlayerAvatar
 
     public static Vector3 ReadGroundInput()
     {
-        var input = new Vector3(Input.GetAxisRaw("Horizontal"), 0f, Input.GetAxisRaw("Vertical"));
-        return Vector3.ClampMagnitude(input, 1f);
+        return GhostInput.GroundMovement();
     }
 }
