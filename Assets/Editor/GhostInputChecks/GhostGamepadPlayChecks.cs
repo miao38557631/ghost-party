@@ -192,7 +192,19 @@ public static class GhostGamepadPlayChecks
     static string Mode { get { return Get(prank, "mode").ToString(); } }
     static string Stage { get { return Get(prank, "stage").ToString(); } }
     static string ActionAt(int step) { return Get(((IList)Get(prank, "curtainPlan"))[step], "action").ToString(); }
-    static int PulseCount { get { return commands.Count(c => c.low > 0 || c.high > 0); } }
+    static List<Rumble> PulseStarts()
+    {
+        var starts = new List<Rumble>();
+        bool playing = false;
+        foreach (var command in commands)
+        {
+            bool active = command.low > 0 || command.high > 0;
+            if (active && !playing) starts.Add(command);
+            playing = active;
+        }
+        return starts;
+    }
+    static int PulseCount { get { return PulseStarts().Count; } }
     static bool Stopped { get { return commands.Count > 0 && commands[commands.Count - 1].low == 0 && commands[commands.Count - 1].high == 0; } }
     static IEnumerator Frames(int count) { for (int i = 0; i < count; i++) yield return null; }
     static IEnumerator WaitBeat(double value)
@@ -306,22 +318,43 @@ public static class GhostGamepadPlayChecks
         Check(Object.FindObjectsOfType<Text>().Any(t => t.text.Contains("A") && t.text.Contains("点")), "Player HUD presents A tap instructions");
         yield return Round(true);
         Check(Stage == "Complete", "Gamepad completes taps, RT directions, sustained hold and final throw");
-        var pulses = commands.Where(c => c.low > 0 || c.high > 0).ToList();
-        Check(pulses.Count == 11, "Exactly 2 tap, 8 swipe and 1 final-throw pulses; no wrap/hold duplicate");
+        var pulses = PulseStarts();
+        Check(pulses.Count == 15, "Every manual rhythm action vibrates: 2 taps, 3 directions, 8 swipes, hold and throw");
         Check(pulses.All(c => c.device == pad.deviceId), "Every hit vibrates the acting gamepad only");
-        Check(pulses.Count(c => Mathf.Approximately(c.low, .1f) && Mathf.Approximately(c.high, .2f)) == 2, "Tap pulse uses 0.10 / 0.20");
-        Check(pulses.Count(c => Mathf.Approximately(c.low, .25f) && Mathf.Approximately(c.high, .38f)) == 8, "Swipe pulse uses 0.25 / 0.38");
-        Check(pulses.Count(c => Mathf.Approximately(c.low, .65f) && Mathf.Approximately(c.high, .45f)) == 1, "Final throw pulse uses 0.65 / 0.45");
+        Check(pulses.Count(c => Mathf.Approximately(c.low, .35f) && Mathf.Approximately(c.high, .50f)) == 2, "Tap uses the stronger short pulse");
+        Check(pulses.Count(c => Mathf.Approximately(c.low, .45f) && Mathf.Approximately(c.high, .60f)) == 3, "Drag and wind directions use their own pulse");
+        Check(pulses.Count(c => Mathf.Approximately(c.low, .48f) && Mathf.Approximately(c.high, .57f)) == 8, "Swipe starts the 3-5-4-3-2 impact pattern");
+        Check(pulses.Count(c => Mathf.Approximately(c.low, .60f) && Mathf.Approximately(c.high, .70f)) == 1, "Hold completion uses its own pulse");
+        Check(pulses.Count(c => Mathf.Approximately(c.low, .60f) && Mathf.Approximately(c.high, .54f)) == 1, "Final throw starts the stronger impact pattern");
         yield return Frames(25); Check(Stopped, "Rumble stops after its unscaled deadline");
+        if (pulses.Count > 0)
+        {
+            var finalWave = commands.Where(c => c.device == pad.deviceId && c.time >= pulses[pulses.Count - 1].time && c.low > 0).ToList();
+            Check(finalWave.Count >= 3 && finalWave.Max(c => c.low) > finalWave[0].low &&
+                finalWave[finalWave.Count - 1].low < finalWave.Max(c => c.low),
+                "Final throw rumble rises to a peak and falls with the camera impact");
+        }
         foreach (var pulse in pulses)
         {
             var stop = commands.FirstOrDefault(c => c.device == pulse.device && c.time >= pulse.time && c.low == 0 && c.high == 0);
-            double minimum = pulse.low < .2f ? .045 : pulse.low < .5f ? .065 : .140;
+            double minimum = pulse.low < .4f ? .080 :
+                pulse.low < .5f ? .100 : pulse.high > .65f ? .140 : .280;
             Check(stop != null && stop.time - pulse.time >= minimum - .002,
                 "Motor command persists for configured " + (minimum * 1000) + " ms and then stops");
         }
         Pad(b: true); yield return Frames(2); Pad(); yield return Frames(2);
         Check(Mode == "Explore" && (bool)player.GetComponent("GhostPlayerVisibility").GetType().GetProperty("IsVisible").GetValue(player.GetComponent("GhostPlayerVisibility")), "B restores exploration and player visibility");
+
+        // Start another round in the same Play session. The first confirmed tap must
+        // re-arm the same controller's motors after ReturnToExplore stopped the last pulse.
+        NearCurtain(); Pad(a: true); yield return Frames(2); Pad(); yield return Frames(2);
+        int secondRoundPulses = PulseCount;
+        yield return WaitBeat(Target - .05);
+        Pad(a: true); yield return WaitStep(0);
+        Check(PulseCount == secondRoundPulses + 1 && PulseStarts().Last().device == pad.deviceId,
+            "Second round in the same Play session restarts vibration on the acting gamepad");
+        Pad(b: true); yield return Frames(2); Pad(); yield return Frames(2);
+        Check(Mode == "Explore" && Stopped, "Leaving the second round stops the motor");
 
         // Repeated identical actions expose accidental level-triggered rearming.
         NearCurtain(); Pad(a: true); yield return Frames(2); Pad(); yield return Frames(2);
@@ -329,6 +362,11 @@ public static class GhostGamepadPlayChecks
         Pad(a: true); yield return Frames(2); Pad(); yield return Frames(2);
         Check(Step == 0 && PulseCount == earlyPulses, "Early A does not advance the action or trigger success rumble");
         Set(prank, "curtainStep", 6); Call(prank, "ResetGestureState"); Set(prank, "curtainTargetBeat", Math.Ceiling(Beat + 1));
+        double missedTarget = Target;
+        yield return WaitBeat(missedTarget + .38);
+        yield return Frames(2);
+        Check(Step == 6 && !(bool)Get(prank, "gestureRetryPending") && Target == Math.Floor(Beat) + 1,
+            "A missed direction stays available on the very next beat");
         var nextConfig = ((IList)Get(prank, "curtainPlan"))[7]; var oldAction = Get(nextConfig, "action");
         Set(nextConfig, "action", Enum.Parse(oldAction.GetType(), "SwipeLeft"));
         int firstCount = PulseCount;

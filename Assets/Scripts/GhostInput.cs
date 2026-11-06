@@ -8,6 +8,8 @@ using UnityEngine.SceneManagement;
 [DefaultExecutionOrder(-1000)]
 public sealed class GhostInput : MonoBehaviour
 {
+    // Shared by every rhythm interaction; the caller reports a confirmed action only.
+    public enum RhythmCue { Tap, Direction, Impact, Hold, Finisher }
     public enum Hit { WindowTap, CurtainHit, FinalThrow }
     sealed class PadState
     {
@@ -19,7 +21,10 @@ public sealed class GhostInput : MonoBehaviour
     readonly Dictionary<Gamepad, PadState> pads = new Dictionary<Gamepad, PadState>();
     GhostInputSettings settings;
     Gamepad activePad, rumblingPad;
-    double rumbleDeadline;
+    double rumbleStartedAt, rumbleDeadline;
+    GhostInputSettings.Pulse rumblePulse;
+    float[] rumblePattern;
+    int rumbleStep = -1;
     bool usingGamepad, tapBlocked, focused = true, applicationPaused;
     bool grip, gripReleased, directionAvailable;
     Vector2 directionSample, rawStick;
@@ -94,7 +99,7 @@ public sealed class GhostInput : MonoBehaviour
     void Update()
     {
         if (Time.timeScale <= 0f || !focused || applicationPaused) StopRumble();
-        else if (rumblingPad != null && Time.realtimeSinceStartupAsDouble >= rumbleDeadline) StopRumble();
+        else UpdateRumble();
         Sample();
     }
 
@@ -238,22 +243,67 @@ public sealed class GhostInput : MonoBehaviour
 
     public static void ConfirmHit(Gamepad source, Hit hit)
     {
+        ConfirmRhythmHit(source, hit == Hit.WindowTap ? RhythmCue.Tap :
+            hit == Hit.CurtainHit ? RhythmCue.Impact : RhythmCue.Finisher);
+    }
+
+    public static void ConfirmRhythmHit(RhythmCue cue) { ConfirmRhythmHit(null, cue); }
+
+    public static void ConfirmRhythmHit(Gamepad source, RhythmCue cue)
+    {
         var s = Read();
+        // Recover the current controller if a new round has no stored gesture source yet.
+        if (source == null && s.usingGamepad) source = s.activePad;
         if (source == null || !source.added || !source.enabled || Suspended) return;
-        var pulse = hit == Hit.WindowTap ? s.settings.windowTap : hit == Hit.CurtainHit ? s.settings.curtainHit : s.settings.finalThrow;
+        GhostInputSettings.Pulse pulse;
+        float[] pattern = null;
+        switch (cue)
+        {
+            case RhythmCue.Tap: pulse = s.settings.windowTap; break;
+            case RhythmCue.Direction: pulse = s.settings.directionHit; break;
+            case RhythmCue.Impact: pulse = s.settings.curtainHit; pattern = s.settings.impactPattern; break;
+            case RhythmCue.Hold: pulse = s.settings.holdHit; break;
+            case RhythmCue.Finisher: pulse = s.settings.finalThrow; pattern = s.settings.finalThrowPattern; break;
+            default: return;
+        }
         s.StopRumble();
         if (pulse.durationMilliseconds <= 0f) return;
         s.rumblingPad = source;
-        s.rumbleDeadline = Time.realtimeSinceStartupAsDouble + pulse.durationMilliseconds / 1000.0;
-        source.SetMotorSpeeds(Mathf.Clamp01(pulse.lowFrequency), Mathf.Clamp01(pulse.highFrequency));
+        s.rumblePulse = pulse;
+        s.rumblePattern = pattern != null && pattern.Length > 0 ? pattern : null;
+        s.rumbleStep = -1;
+        s.rumbleStartedAt = Time.realtimeSinceStartupAsDouble;
+        s.rumbleDeadline = s.rumbleStartedAt + pulse.durationMilliseconds / 1000.0;
+        s.UpdateRumble();
     }
 
     public static void StopHaptics() { if (instance != null) instance.StopRumble(); }
+    void UpdateRumble()
+    {
+        if (rumblingPad == null) return;
+        if (!rumblingPad.added || !rumblingPad.enabled || Time.realtimeSinceStartupAsDouble >= rumbleDeadline)
+        { StopRumble(); return; }
+        int step = 0;
+        float strength = 1f;
+        if (rumblePattern != null)
+        {
+            var pattern = rumblePattern;
+            step = Mathf.Min(pattern.Length - 1, (int)((Time.realtimeSinceStartupAsDouble - rumbleStartedAt)
+                / (rumbleDeadline - rumbleStartedAt) * pattern.Length));
+            strength = Mathf.Clamp01(pattern[step]);
+        }
+        if (step == rumbleStep) return;
+        rumbleStep = step;
+        rumblingPad.SetMotorSpeeds(Mathf.Clamp01(rumblePulse.lowFrequency * strength),
+            Mathf.Clamp01(rumblePulse.highFrequency * strength));
+    }
     void StopRumble()
     {
         if (rumblingPad != null) rumblingPad.ResetHaptics();
         rumblingPad = null;
-        rumbleDeadline = 0;
+        rumbleStartedAt = rumbleDeadline = 0;
+        rumbleStep = -1;
+        rumblePattern = null;
     }
     void DeviceChanged(InputDevice device, InputDeviceChange change)
     {

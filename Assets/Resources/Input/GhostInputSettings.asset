@@ -20,14 +20,34 @@ MonoBehaviour:
   triggerPressThreshold: 0.55
   triggerReleaseThreshold: 0.4
   windowTap:
-    lowFrequency: 0.1
-    highFrequency: 0.2
-    durationMilliseconds: 45
+    lowFrequency: 0.35
+    highFrequency: 0.5
+    durationMilliseconds: 80
+  directionHit:
+    lowFrequency: 0.45
+    highFrequency: 0.6
+    durationMilliseconds: 100
   curtainHit:
-    lowFrequency: 0.25
-    highFrequency: 0.38
-    durationMilliseconds: 65
-  finalThrow:
-    lowFrequency: 0.65
-    highFrequency: 0.45
+    lowFrequency: 0.8
+    highFrequency: 0.95
+    durationMilliseconds: 280
+  holdHit:
+    lowFrequency: 0.6
+    highFrequency: 0.7
     durationMilliseconds: 140
+  finalThrow:
+    lowFrequency: 1
+    highFrequency: 0.9
+    durationMilliseconds: 280
+  impactPattern:
+  - 0.6
+  - 1
+  - 0.8
+  - 0.6
+  - 0.4
+  finalThrowPattern:
+  - 0.6
+  - 1
+  - 0.8
+  - 0.6
+  - 0.4

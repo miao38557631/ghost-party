@@ -1365,9 +1365,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         }
         if (gestureRetryPending)
         {
-            // Recovery lasts one full beat. No movement during this interval is
-            // cached; after recovery, the retry beat and its 0.3-beat start
-            // sample are established fresh.
+            // Only an interrupted Hold uses a recovery timer. Ordinary missed
+            // directions can be prepared again for the very next beat.
             gestureArmed = false;
             gestureStartCaptured = false;
             if (Time.time < gestureRetryReadyAt) return;
@@ -1457,7 +1456,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             TriggerCameraFailure();
             if (!RegisterEmptyBeat()) return;
             curtainTargetBeat = Math.Floor(beatClock.BeatIndex) + 1.0;
-            retryMessage = T("漏拍了，当前操作留到下一拍重试。", "Missed; retry this action on the next beat.");
+            retryMessage = GhostInput.UsingGamepad
+                ? T("漏拍了，摇杆回中后下一拍重推。", "Missed; recenter the stick and retry next beat.")
+                : T("漏拍了，当前操作留到下一拍重试。", "Missed; retry this action on the next beat.");
             ShowFeedback(T("漏拍 · 下一拍重试", "MISS · Retry next beat"), new Color(1f, 0.45f, 0.35f));
         }
     }
@@ -1487,11 +1488,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             retryMessage = "";
             ShowFeedback(T("卡点！", "ON BEAT!"), new Color(1f, 0.84f, 0.3f));
             lastPerformedAction = PlanAction(curtainStep);
-            if (lastPerformedAction == CurtainAction.Tap) GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.WindowTap);
-            else if (lastPerformedAction == CurtainAction.SwipeLeft || lastPerformedAction == CurtainAction.SwipeRight)
-                GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.CurtainHit);
-            else if (lastPerformedAction == CurtainAction.ThrowRightRelease)
-                GhostInput.ConfirmHit(gestureGamepad, GhostInput.Hit.FinalThrow);
+            GhostInput.RhythmCue cue = lastPerformedAction == CurtainAction.Tap ? GhostInput.RhythmCue.Tap :
+                lastPerformedAction == CurtainAction.SwipeLeft || lastPerformedAction == CurtainAction.SwipeRight ? GhostInput.RhythmCue.Impact :
+                lastPerformedAction == CurtainAction.Hold ? GhostInput.RhythmCue.Hold :
+                lastPerformedAction == CurtainAction.ThrowRightRelease ? GhostInput.RhythmCue.Finisher : GhostInput.RhythmCue.Direction;
+            GhostInput.ConfirmRhythmHit(gestureGamepad, cue);
             actionImpactUntil = Time.time + 0.24f;
             TriggerCameraImpact(lastPerformedAction);
             if (keepHolding)
@@ -1514,7 +1515,9 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             TriggerCameraFailure();
             if (!RegisterEmptyBeat()) return;
             curtainTargetBeat = Math.Floor(beatClock.BeatIndex) + 1.0;
-            retryMessage = T("太晚了，当前操作下一拍重试。", "Too late; retry this action next beat.");
+            retryMessage = GhostInput.UsingGamepad
+                ? T("太晚了，摇杆回中后下一拍重推。", "Too late; recenter the stick and retry next beat.")
+                : T("太晚了，当前操作下一拍重试。", "Too late; retry this action next beat.");
             ShowFeedback(T("太晚 · 下一拍重试", "TOO LATE · Retry next beat"), new Color(1f, 0.45f, 0.35f));
         }
     }
@@ -2194,11 +2197,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         // Every failure path clears gameplay state, even if no camera pan started.
         gestureArmed = false;
         gestureStart = GhostInput.MousePosition;
+        gestureStartCaptured = false;
         cameraGestureStarted = false;
-        bool directionalRetry = stage == PrankStage.CurtainSequence && curtainStep < PlanCount
-            && IsDirectionalAction(PlanAction(curtainStep));
-        gestureRetryPending = directionalRetry;
-        gestureRetryReadyAt = directionalRetry ? Time.time + BeatDurationSeconds : 0f;
+        gestureRetryPending = false;
+        gestureRetryReadyAt = 0f;
         if (!hadCameraGesture || cam == null) return;
         cameraReboundOffset = Quaternion.Inverse(cam.transform.rotation) * appliedCameraActionOffset;
         cameraReboundStartedAt = Time.time;
