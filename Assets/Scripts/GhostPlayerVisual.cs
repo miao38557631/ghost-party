@@ -44,6 +44,8 @@ public sealed class GhostPlayerVisual : MonoBehaviour
     Renderer spineRenderer;
     bool spineHeightMeasured;
     string spineCurrentAnimation;
+    Spine.TrackEntry spineTrack;
+    int syncedClockRevision = -1;
     float spineNaturalHeight = 1f;
     float displayedWorldY;
     float visualVerticalVelocity;
@@ -133,6 +135,7 @@ public sealed class GhostPlayerVisual : MonoBehaviour
         transform.localPosition = desiredLocalPosition;
         if (spine != null)
         {
+            if (syncedClockRevision != RhythmAccent.ClockRevision) AlignSpineToBeat();
             MeasureSpineHeight();
             transform.localScale = Vector3.one * (worldHeight / Mathf.Max(0.0001f, spineNaturalHeight * parentScale));
         }
@@ -164,8 +167,18 @@ public sealed class GhostPlayerVisual : MonoBehaviour
         if (animation == null) return;
         if (spineCurrentAnimation == animation.Name) return;
         spineCurrentAnimation = animation.Name;
-        spine.AnimationState.SetAnimation(0, animation.Name, true);
+        spineTrack = spine.AnimationState.SetAnimation(0, animation.Name, true);
         spine.timeScale = spinePlaybackSpeed;
+        syncedClockRevision = -1;
+        AlignSpineToBeat();
+    }
+
+    void AlignSpineToBeat()
+    {
+        if (spineTrack == null ||
+            !RhythmAccent.TryGetLoopTime(spineTrack.Animation.Duration, out float trackTime)) return;
+        spineTrack.TrackTime = trackTime;
+        syncedClockRevision = RhythmAccent.ClockRevision;
     }
 
     Spine.Animation FindSpineAnimation(string wanted)

@@ -31,6 +31,8 @@ public sealed class NpcNavMover : MonoBehaviour
     NavMeshAgent agent;
     PrankNpcActor actor;
     SkeletonAnimation spine;
+    Spine.TrackEntry animationTrack;
+    int syncedClockRevision = -1;
     int patrolIndex;
     float pauseUntil;
     float nextRepathAt;
@@ -291,6 +293,24 @@ public sealed class NpcNavMover : MonoBehaviour
         if (spine == null || !spine.IsValid) return;
         string animationName = value ? walkAnimation : idleAnimation;
         if (spine.Skeleton.Data.FindAnimation(animationName) != null)
-            spine.AnimationState.SetAnimation(0, animationName, true);
+        {
+            animationTrack = spine.AnimationState.SetAnimation(0, animationName, true);
+            syncedClockRevision = -1;
+            AlignAnimationToBeat();
+        }
+    }
+
+    void LateUpdate()
+    {
+        if (actor == null && animationTrack != null &&
+            syncedClockRevision != RhythmAccent.ClockRevision) AlignAnimationToBeat();
+    }
+
+    void AlignAnimationToBeat()
+    {
+        if (animationTrack == null ||
+            !RhythmAccent.TryGetLoopTime(animationTrack.Animation.Duration, out float trackTime)) return;
+        animationTrack.TrackTime = trackTime;
+        syncedClockRevision = RhythmAccent.ClockRevision;
     }
 }

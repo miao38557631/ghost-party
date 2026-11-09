@@ -10,6 +10,9 @@ public static class RhythmAccent
     static double clockStartDsp;
     static double clockSecondsPerBeat;
     static double heardOutputCompensation;
+    static int clockRevision;
+
+    public static int ClockRevision { get { return clockRevision; } }
 
     public static void ConfigureClock(double startDsp, double secondsPerBeat, double outputCompensation)
     {
@@ -17,9 +20,10 @@ public static class RhythmAccent
         clockSecondsPerBeat = Math.Max(0.0001, secondsPerBeat);
         heardOutputCompensation = Math.Max(0.0, outputCompensation);
         clockConfigured = true;
+        clockRevision++;
     }
 
-    public static void ClearClock() { clockConfigured = false; }
+    public static void ClearClock() { clockConfigured = false; clockRevision++; }
 
     public static bool TryGetBeat(out double beatIndex, out double secondsPerBeat)
     {
@@ -44,5 +48,14 @@ public static class RhythmAccent
     public static double PhaseInCycle(double beatIndex)
     {
         return (beatIndex - FirstAccentBeat) / BeatsPerCycle - CycleAtBeat(beatIndex);
+    }
+
+    /// <summary>Position in a two-beat Spine loop, using the same music phase as NPC idle.</summary>
+    public static bool TryGetLoopTime(float duration, out float trackTime)
+    {
+        trackTime = 0f;
+        if (duration <= 0f || !TryGetBeat(out double beatIndex, out _)) return false;
+        trackTime = (float)(PhaseInCycle(beatIndex) * duration);
+        return true;
     }
 }

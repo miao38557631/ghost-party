@@ -10,11 +10,14 @@ public sealed class PrankNpcActor : MonoBehaviour
     Transform artwork;
     Spine.Unity.SkeletonAnimation spineIdle;
     Spine.TrackEntry idleTrack;
+    Spine.TrackEntry walkTrack;
+    int syncedWalkClockRevision = -1;
     bool walking;
     bool initialized;
     float artworkScaleX;
     Camera viewCamera;
     long lastAccentCycle = long.MinValue;
+    int syncedIdleClockRevision = -1;
 
     public bool CreatePlaceholderBody { get { return createPlaceholderBody; } set { createPlaceholderBody = value; } }
     public Transform Artwork { get { return artwork; } }
@@ -79,8 +82,9 @@ public sealed class PrankNpcActor : MonoBehaviour
         float duration = idleTrack.Animation.Duration;
         spineIdle.timeScale = (float)(duration / (RhythmAccent.BeatsPerCycle * secondsPerBeat));
         long cycle = RhythmAccent.CycleAtBeat(beatIndex);
-        if (cycle == lastAccentCycle) return;
+        if (cycle == lastAccentCycle && syncedIdleClockRevision == RhythmAccent.ClockRevision) return;
         lastAccentCycle = cycle;
+        syncedIdleClockRevision = RhythmAccent.ClockRevision;
         double phase = RhythmAccent.PhaseInCycle(beatIndex);
         idleTrack.TrackTime = (float)(phase * duration);
     }
@@ -93,13 +97,24 @@ public sealed class PrankNpcActor : MonoBehaviour
         if (walking)
         {
             spineIdle.timeScale = 1f;
-            spineIdle.AnimationState.SetAnimation(0, "walk", true);
+            walkTrack = spineIdle.AnimationState.SetAnimation(0, "walk", true);
+            syncedWalkClockRevision = -1;
+            AlignWalkToBeat();
         }
         else
         {
+            walkTrack = null;
             idleTrack = spineIdle.AnimationState.SetAnimation(0, "idle", true);
             lastAccentCycle = long.MinValue;
         }
+    }
+
+    void AlignWalkToBeat()
+    {
+        if (walkTrack == null ||
+            !RhythmAccent.TryGetLoopTime(walkTrack.Animation.Duration, out float trackTime)) return;
+        walkTrack.TrackTime = trackTime;
+        syncedWalkClockRevision = RhythmAccent.ClockRevision;
     }
 
     public void SetFacingLeft(bool facingLeft)
@@ -113,7 +128,13 @@ public sealed class PrankNpcActor : MonoBehaviour
     void LateUpdate()
     {
         if (RhythmAccent.TryGetBeat(out double beatIndex, out double secondsPerBeat))
-            SyncIdleToBeat(beatIndex, secondsPerBeat);
+        {
+            if (walking)
+            {
+                if (syncedWalkClockRevision != RhythmAccent.ClockRevision) AlignWalkToBeat();
+            }
+            else SyncIdleToBeat(beatIndex, secondsPerBeat);
+        }
         if (Head != null) Head.position = transform.position + Vector3.up * 0.88f;
         FaceCamera();
     }
