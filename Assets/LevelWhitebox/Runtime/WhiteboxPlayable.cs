@@ -19,6 +19,7 @@ namespace GhostParty.LevelWhitebox
         [SerializeField] Transform curtainSpot;
         [SerializeField] LevelCurtainEncounter curtainPrank;
         [SerializeField] Camera followCamera;
+        [SerializeField] Transform floorBoundsSource;
         WhiteboxCamera cameraSettings;
         float floorLeftX;
         float floorRightX;
@@ -91,10 +92,14 @@ namespace GhostParty.LevelWhitebox
             var rig = followCamera.GetComponent<PrankCameraRig>();
             if (rig == null) rig = followCamera.gameObject.AddComponent<PrankCameraRig>();
             rig.Initialize(player, cameraSettings, floorLeftX, floorRightX);
+            // Separate whitebox wall pieces still fade piece by piece. The imported wall mesh uses a
+            // hard opening centered on the ghost when it stands behind a foreground wall.
             var wallGroup = GameObject.Find("02_BlackPlanLines_Walls_2m_80mm");
             if (wallGroup != null)
                 followCamera.gameObject.AddComponent<WhiteboxWallOcclusion>()
                     .Initialize(player, wallGroup.transform);
+            else
+                GhostWallCutout.EnsureForScene(gameObject.scene, player);
             Debug.Log("Whitebox playable ready on " + (secondFloor ? "Level02" : "Level01") +
                       ", spawned at " + player.position);
         }
@@ -107,7 +112,8 @@ namespace GhostParty.LevelWhitebox
                 GhostPlayerAvatar.SetMovement(player, Vector3.zero);
                 return;
             }
-            Vector3 movement = GhostPlayerAvatar.ReadGroundInput();
+            Vector3 input = GhostPlayerAvatar.ReadGroundInput();
+            Vector3 movement = CameraRelativeGroundMovement(input);
             GhostPlayerAvatar.Move(player, movement, Time.deltaTime);
 
             if (!GhostInput.InteractPressed) return;
@@ -122,12 +128,28 @@ namespace GhostParty.LevelWhitebox
                 curtainPrank.TryStart();
         }
 
+        Vector3 CameraRelativeGroundMovement(Vector3 input)
+        {
+            if (followCamera == null || input.sqrMagnitude == 0f) return input;
+            Transform view = followCamera.transform;
+            Vector3 right = Vector3.ProjectOnPlane(view.right, Vector3.up).normalized;
+            Vector3 forward = Vector3.ProjectOnPlane(view.forward, Vector3.up).normalized;
+            return Vector3.ClampMagnitude(right * input.x + forward * input.z, 1f);
+        }
+
         void FindFloorHorizontalBounds()
         {
-            var slabs = GameObject.Find("01_Slabs");
-            var renderers = slabs != null ? slabs.GetComponentsInChildren<Renderer>() : null;
+            // The floor source comes from GhostFloorSurface (inspector references, then markers, then the
+            // legacy generated/imported names), so splitting the model into floor and wall objects needs no
+            // code change here. Walls are not part of that source and never widen the camera turn range.
+            var floorSources = GhostFloorSurface.ResolveRoots(SceneManager.GetActiveScene(), null);
+            GameObject source = floorBoundsSource != null && floorBoundsSource.gameObject.activeInHierarchy
+                ? floorBoundsSource.gameObject
+                : floorSources.Count > 0 ? floorSources[0].gameObject : null;
+            var renderers = source != null ? source.GetComponentsInChildren<Renderer>() : null;
             if (renderers == null || renderers.Length == 0)
             {
+                Debug.LogWarning("Camera turn bounds have no active floor renderer; using a temporary range around the player.");
                 floorLeftX = player.position.x - 1f;
                 floorRightX = player.position.x + 1f;
                 return;

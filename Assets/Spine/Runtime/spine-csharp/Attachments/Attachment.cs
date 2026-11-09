@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -30,23 +30,66 @@
 using System;
 
 namespace Spine {
+
+	/// <summary>The base class for all attachments. Multiple <see cref="Skeleton"/> instances, slots, or skins can use the same
+	/// attachments.</summary>
 	abstract public class Attachment {
-		public string Name { get; private set; }
+		static private readonly int[] Empty = new int[0];
+
+		internal Attachment timelineAttachment;
+		internal int[] timelineSlots = Empty;
+
+		/// <summary>The attachment's name.</summary>
+		public string Name { get; }
+
+		/// <summary>Timelines for the timeline attachment are also applied to this attachment.
+		/// May be null if no attachment-specific timelines should be applied.</summary>
+		public Attachment TimelineAttachment { get { return timelineAttachment; } set { timelineAttachment = value; } }
+
+		/// <summary>
+		/// Slots that can have attachments whose <see cref="timelineAttachment"/> is this attachment.
+		/// </summary>
+		public int[] TimelineSlots { get { return timelineSlots; } set { timelineSlots = value; } }
 
 		protected Attachment (string name) {
 			if (name == null) throw new ArgumentNullException("name", "name cannot be null");
-			Name = name;
+			this.Name = name;
+			timelineAttachment = this;
+		}
+
+		/// <summary>Copy constructor.</summary>
+		protected Attachment (Attachment other) {
+			Name = other.Name;
+			timelineAttachment = other.timelineAttachment;
+			timelineSlots = other.timelineSlots;
+		}
+
+		/// <summary>
+		/// Returns true if the <c>slotIndex</c> or any <see cref="timelineSlots"/> have an attachment whose <see cref="timelineAttachment"/> is
+		/// this attachment.
+		/// </summary>
+		/// <param name="slots">The <see cref="Skeleton.Slots"/>.</param>
+		/// <param name="slotIndex">The timeline's primary slot index.</param>
+		public bool IsTimelineActive (Slot[] slots, int slotIndex, bool appliedPose) {
+			Slot slot = slots[slotIndex];
+			if (slot.Bone.Active) {
+				Attachment other = (appliedPose ? slot.AppliedPose : slot.Pose).Attachment;
+				if (other != null && other.timelineAttachment == this) return true;
+			}
+			for (int i = 0, n = timelineSlots.Length; i < n; i++) {
+				slot = slots[timelineSlots[i]];
+				if (!slot.Bone.Active) continue;
+				Attachment other = (appliedPose ? slot.AppliedPose : slot.Pose).Attachment;
+				if (other != null && other.timelineAttachment == this) return true;
+			}
+			return false;
 		}
 
 		override public string ToString () {
 			return Name;
 		}
 
-		///<summary>Returns a copy of the attachment.</summary>
+		/// <summary>Returns a copy of the attachment.</summary>
 		public abstract Attachment Copy ();
-	}
-
-	public interface IHasRendererObject {
-		object RendererObject { get; set; }
 	}
 }

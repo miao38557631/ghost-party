@@ -77,7 +77,7 @@ public static class GhostPlayerPrefabBuilder
                 var controller = root.AddComponent<CharacterController>();
                 controller.height = 1f; controller.radius = 0.45f; controller.center = Vector3.zero;
                 controller.skinWidth = 0.03f; controller.minMoveDistance = 0f;
-                controller.stepOffset = 0f; controller.slopeLimit = 45f; controller.detectCollisions = true;
+                controller.stepOffset = 0.45f; controller.slopeLimit = 45f; controller.detectCollisions = true;
                 root.AddComponent<GhostPlayerMotor>();
                 root.AddComponent<GhostPlayerVisibility>();
                 var glow = root.AddComponent<Light>();

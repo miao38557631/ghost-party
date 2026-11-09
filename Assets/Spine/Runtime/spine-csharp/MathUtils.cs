@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -33,14 +33,17 @@ using System;
 
 namespace Spine {
 	public static class MathUtils {
-		public const float PI = 3.1415927f;
-		public const float PI2 = PI * 2;
-		public const float RadDeg = 180f / PI;
-		public const float DegRad = PI / 180;
+		public const float Epsilon = 0.00001f, EpsilonSq = Epsilon * Epsilon;
+		public const float PI = 3.1415927f, PI2 = PI * 2, InvPI2 = 1 / PI2;
+		public const float RadiansToDegrees = 180f / PI, RadDeg = RadiansToDegrees;
+		public const float DegreesToRadians = PI / 180, DegRad = DegreesToRadians;
+
+		public const float FloatRoundingError = 0.000001f;
+		public const float HalfPi = PI / 2;
 
 		static Random random = new Random();
 
-	#if USE_FAST_SIN_COS_ATAN2_APPROXIMATIONS
+#if USE_FAST_SIN_COS_ATAN2_APPROXIMATIONS
 		const int SIN_BITS = 14; // 16KB. Adjust for accuracy.
 		const int SIN_MASK = ~(-1 << SIN_BITS);
 		const int SIN_COUNT = SIN_MASK + 1;
@@ -77,6 +80,10 @@ namespace Spine {
 			return sin[(int)((degrees + 90) * DegToIndex) & SIN_MASK];
 		}
 
+		static public float Atan2Deg (float y, float x) {
+			return Atan2(y, x) * RadDeg;
+		}
+
 		/// <summary>Returns atan2 in radians, faster but less accurate than Math.Atan2. Average error of 0.00231 radians (0.1323
 		/// degrees), largest error of 0.00488 radians (0.2796 degrees).</summary>
 		static public float Atan2 (float y, float x) {
@@ -94,7 +101,7 @@ namespace Spine {
 			atan = PI / 2 - z / (z * z + 0.28f);
 			return y < 0f ? atan - PI : atan;
 		}
-	#else
+#else
 		/// <summary>Returns the sine of a given angle in radians.</summary>
 		static public float Sin (float radians) {
 			return (float)Math.Sin(radians);
@@ -115,59 +122,42 @@ namespace Spine {
 			return (float)Math.Cos(degrees * DegRad);
 		}
 
+
+		static public float Atan2Deg (float y, float x) {
+			return (float)Math.Atan2(y, x) * RadDeg;
+		}
+
+
 		/// <summary>Returns the atan2 using Math.Atan2.</summary>
 		static public float Atan2 (float y, float x) {
 			return (float)Math.Atan2(y, x);
 		}
-	#endif
+#endif
+		static public float Cbrt (float x) {
+			return x < 0f ? -(float)Math.Pow(-x, 1.0 / 3.0) : (float)Math.Pow(x, 1.0 / 3.0);
+		}
+
 		static public float Clamp (float value, float min, float max) {
 			if (value < min) return min;
 			if (value > max) return max;
 			return value;
 		}
 
-		static public float RandomTriangle(float min, float max) {
+		static public float Clamp01 (float value) {
+			if (value < 0) return 0;
+			if (value > 1) return 1;
+			return value;
+		}
+
+		static public float RandomTriangle (float min, float max) {
 			return RandomTriangle(min, max, (min + max) * 0.5f);
 		}
 
-		static public float RandomTriangle(float min, float max, float mode) {
+		static public float RandomTriangle (float min, float max, float mode) {
 			float u = (float)random.NextDouble();
 			float d = max - min;
 			if (u <= (mode - min) / d) return min + (float)Math.Sqrt(u * d * (mode - min));
 			return max - (float)Math.Sqrt((1 - u) * d * (max - mode));
-		}
-	}
-
-	public abstract class IInterpolation {
-		public static IInterpolation Pow2 = new Pow(2);
-		public static IInterpolation Pow2Out = new PowOut(2);
-
-		protected abstract float Apply(float a);
-
-		public float Apply(float start, float end, float a) {
-			return start + (end - start) * Apply(a);
-		}
-	}
-
-	public class Pow: IInterpolation {
-		public float Power { get; set; }
-
-		public Pow(float power) {
-			Power = power;
-		}
-
-		protected override float Apply(float a) {
-			if (a <= 0.5f) return (float)Math.Pow(a * 2, Power) / 2;
-			return (float)Math.Pow((a - 1) * 2, Power) / (Power % 2 == 0 ? -2 : 2) + 1;
-		}
-	}
-
-	public class PowOut : Pow {
-		public PowOut(float power) : base(power) {
-		}
-
-		protected override float Apply(float a) {
-			return (float)Math.Pow(a - 1, Power) * (Power % 2 == 0 ? -1 : 1) + 1;
 		}
 	}
 }

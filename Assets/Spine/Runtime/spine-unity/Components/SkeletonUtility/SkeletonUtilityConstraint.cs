@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -35,13 +35,13 @@ using UnityEngine;
 
 namespace Spine.Unity {
 
-	#if NEW_PREFAB_SYSTEM
+#if NEW_PREFAB_SYSTEM
 	[ExecuteAlways]
-	#else
+#else
 	[ExecuteInEditMode]
-	#endif
+#endif
 	[RequireComponent(typeof(SkeletonUtilityBone))]
-	[HelpURL("http://esotericsoftware.com/spine-unity#SkeletonUtilityConstraint")]
+	[HelpURL("https://esotericsoftware.com/spine-unity-utility-components#SkeletonUtilityConstraint")]
 	public abstract class SkeletonUtilityConstraint : MonoBehaviour {
 
 		protected SkeletonUtilityBone bone;
@@ -50,6 +50,7 @@ namespace Spine.Unity {
 		protected virtual void OnEnable () {
 			bone = GetComponent<SkeletonUtilityBone>();
 			hierarchy = transform.GetComponentInParent<SkeletonUtility>();
+			hierarchy.RegisterBone(bone); // prevent update order issues
 			hierarchy.RegisterConstraint(this);
 		}
 

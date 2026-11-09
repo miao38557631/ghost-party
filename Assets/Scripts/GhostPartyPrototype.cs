@@ -127,7 +127,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [SerializeField] bool beatAssistEnabled = false;
 
     [Header("Tuning")]
-    [SerializeField] float moveSpeed = 4.5f;
     [SerializeField] float interactionRange = 2.0f;
     [SerializeField] float beatBpm = 112f;
     [SerializeField, Range(0.05f, 1f)] float bgmVolume = 0.34f;
@@ -150,6 +149,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [SerializeField] Transform ghost;
     Transform curtain, guest, guestHead;
     PrankNpcActor guestActor;
+    NpcNavMover guestNavigator;
     Camera cam;
     Canvas canvas;
     GameObject embeddedHudContent;
@@ -322,6 +322,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         guest.position = guestHome;
         guestActor = guest.GetComponent<PrankNpcActor>();
         if (guestActor == null) guestActor = guest.gameObject.AddComponent<PrankNpcActor>();
+        guestNavigator = guest.GetComponent<NpcNavMover>();
         guestActor.EnsureInitialized(cam);
         guestHead = guestActor.Head;
         guestHeadHome = guestHead.position;
@@ -1244,6 +1245,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             guest.rotation = Quaternion.identity;
             guest.localScale = guestScaleHome;
             guestLeaveAt = -1f;
+            if (guestNavigator != null) guestNavigator.ResumeNavigation();
         }
     }
 
@@ -1261,6 +1263,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void BeginPrank()
     {
+        if (guestNavigator != null) guestNavigator.SuspendNavigation();
         GhostInput.BeginPossession();
         if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
         StartMotionSession();
@@ -1604,6 +1607,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (embeddedInLevel && EmbeddedPrankFinished != null) EmbeddedPrankFinished();
         if (inputCueIcon != null) inputCueIcon.text = "";
         if (guestHead != null) guestHead.localScale = guestHeadScaleHome;
+        if (guestLeaveAt <= 0f && guestNavigator != null) guestNavigator.ResumeNavigation();
     }
 
     void ResetGestureState()

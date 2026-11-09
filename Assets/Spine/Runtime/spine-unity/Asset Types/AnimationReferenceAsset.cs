@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -40,22 +40,51 @@ namespace Spine.Unity {
 		[SerializeField, SpineAnimation] protected string animationName;
 		private Animation animation;
 
-		public SkeletonDataAsset SkeletonDataAsset { get { return skeletonDataAsset; } }
+		public SkeletonDataAsset SkeletonDataAsset {
+			get { return skeletonDataAsset; }
+			set { skeletonDataAsset = value; }
+		}
+
+		public string AnimationName {
+			get {
+				return animationName;
+			}
+			set {
+				if (animationName == value)
+					return;
+				animationName = value;
+#if AUTOINIT_SPINEREFERENCE
+				Initialize();
+#endif
+			}
+		}
 
 		public Animation Animation {
 			get {
-				#if AUTOINIT_SPINEREFERENCE
+#if AUTOINIT_SPINEREFERENCE
 				if (animation == null)
 					Initialize();
-				#endif
-
+#endif
 				return animation;
 			}
 		}
 
+#if UNITY_EDITOR
+		void OnValidate () {
+			Clear();
+		}
+#endif
+
+		/// <summary>Clears the cached animation corresponding to a loaded SkeletonData object.
+		/// Use this to force a reload for the next time Animation is called.</summary>
+		public void Clear () {
+			animation = null;
+		}
+
 		public void Initialize () {
 			if (skeletonDataAsset == null) return;
-			this.animation = skeletonDataAsset.GetSkeletonData(AnimationReferenceAsset.QuietSkeletonData).FindAnimation(animationName);
+			SkeletonData skeletonData = skeletonDataAsset.GetSkeletonData(AnimationReferenceAsset.QuietSkeletonData);
+			this.animation = skeletonData != null ? skeletonData.FindAnimation(animationName) : null;
 			if (this.animation == null) Debug.LogWarningFormat("Animation '{0}' not found in SkeletonData : {1}.", animationName, skeletonDataAsset.name);
 		}
 

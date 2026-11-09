@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -27,9 +27,9 @@
  * THE SPINE RUNTIMES, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *****************************************************************************/
 
-using UnityEngine;
-using System.Collections.Generic;
 using Spine.Unity.AnimationTools;
+using System.Collections.Generic;
+using UnityEngine;
 
 namespace Spine.Unity {
 
@@ -46,7 +46,7 @@ namespace Spine.Unity {
 	/// For <c>SkeletonMecanim</c> please use
 	/// <see cref="SkeletonMecanimRootMotion">SkeletonMecanimRootMotion</see> instead.
 	/// </remarks>
-	[HelpURL("http://esotericsoftware.com/spine-unity#SkeletonRootMotion")]
+	[HelpURL("https://esotericsoftware.com/spine-unity-utility-components#SkeletonRootMotion")]
 	public class SkeletonRootMotion : SkeletonRootMotionBase {
 		#region Inspector
 		const int DefaultAnimationTrackFlags = -1;
@@ -54,32 +54,32 @@ namespace Spine.Unity {
 		#endregion
 
 		AnimationState animationState;
-		Canvas canvas;
+		SkeletonGraphic skeletonGraphic;
 
 		public override Vector2 GetRemainingRootMotion (int trackIndex) {
-			TrackEntry track = animationState.GetCurrent(trackIndex);
-			if (track == null)
+			TrackEntry entry = animationState.GetTrack(trackIndex);
+			if (entry == null)
 				return Vector2.zero;
 
-			var animation = track.Animation;
-			float start = track.AnimationTime;
-			float end = animation.duration;
+			Animation animation = entry.Animation;
+			float start = entry.AnimationTime;
+			float end = animation.Duration;
 			return GetAnimationRootMotion(start, end, animation);
 		}
 
 		public override RootMotionInfo GetRootMotionInfo (int trackIndex) {
-			TrackEntry track = animationState.GetCurrent(trackIndex);
-			if (track == null)
+			TrackEntry entry = animationState.GetTrack(trackIndex);
+			if (entry == null)
 				return new RootMotionInfo();
 
-			var animation = track.Animation;
-			float time = track.AnimationTime;
-			return GetAnimationRootMotionInfo(track.Animation, time);
+			Animation animation = entry.Animation;
+			float time = entry.AnimationTime;
+			return GetAnimationRootMotionInfo(entry.Animation, time);
 		}
 
 		protected override float AdditionalScale {
 			get {
-				return canvas ? canvas.referencePixelsPerUnit: 1.0f;
+				return skeletonGraphic ? skeletonGraphic.MeshScale : 1.0f;
 			}
 		}
 
@@ -88,14 +88,12 @@ namespace Spine.Unity {
 			animationTrackFlags = DefaultAnimationTrackFlags;
 		}
 
-		protected override void Start () {
-			base.Start();
-			var animstateComponent = skeletonComponent as IAnimationStateComponent;
+		public override void Initialize () {
+			base.Initialize();
+			IAnimationStateComponent animstateComponent = animationComponent as IAnimationStateComponent;
 			this.animationState = (animstateComponent != null) ? animstateComponent.AnimationState : null;
 
-			if (this.GetComponent<CanvasRenderer>() != null) {
-				canvas = this.GetComponentInParent<Canvas>();
-			}
+			skeletonGraphic = this.GetComponent<SkeletonGraphic>();
 		}
 
 		protected override Vector2 CalculateAnimationsMovementDelta () {
@@ -108,49 +106,79 @@ namespace Spine.Unity {
 				if (animationTrackFlags != -1 && (animationTrackFlags & 1 << trackIndex) == 0)
 					continue;
 
-				TrackEntry track = animationState.GetCurrent(trackIndex);
+				TrackEntry entry = animationState.GetTrack(trackIndex);
 				TrackEntry next = null;
-				while (track != null) {
-					var animation = track.Animation;
-					float start = track.animationLast;
-					float end = track.AnimationTime;
-					var currentDelta = GetAnimationRootMotion(start, end, animation);
+				while (entry != null) {
+					Animation animation = entry.Animation;
+					float start = entry.AnimationLast;
+					float end = entry.AnimationTime;
+					Vector2 currentDelta = GetAnimationRootMotion(start, end, animation);
 					if (currentDelta != Vector2.zero) {
-						ApplyMixAlphaToDelta(ref currentDelta, next, track);
+						ApplyMixAlphaToDelta(ref currentDelta, next, entry);
 						localDelta += currentDelta;
 					}
 
 					// Traverse mixingFrom chain.
-					next = track;
-					track = track.mixingFrom;
+					next = entry;
+					entry = entry.MixingFrom;
 				}
 			}
 			return localDelta;
 		}
 
-		void ApplyMixAlphaToDelta (ref Vector2 currentDelta, TrackEntry next, TrackEntry track) {
-			// Apply mix alpha to the delta position (based on AnimationState.cs).
-			float mix;
-			if (next != null) {
-				if (next.mixDuration == 0) { // Single frame mix to undo mixingFrom changes.
-					mix = 1;
+		protected override float CalculateAnimationsRotationDelta () {
+			float localDelta = 0;
+			int trackCount = animationState.Tracks.Count;
+
+			for (int trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+				// note: animationTrackFlags != -1 below covers trackIndex >= 32,
+				// with -1 corresponding to entry "everything" of the dropdown list.
+				if (animationTrackFlags != -1 && (animationTrackFlags & 1 << trackIndex) == 0)
+					continue;
+
+				TrackEntry entry = animationState.GetTrack(trackIndex);
+				TrackEntry next = null;
+				while (entry != null) {
+					Animation animation = entry.Animation;
+					float start = entry.AnimationLast;
+					float end = entry.AnimationTime;
+					float currentDelta = GetAnimationRootMotionRotation(start, end, animation);
+					if (currentDelta != 0) {
+						ApplyMixAlphaToDelta(ref currentDelta, next, entry);
+						localDelta += currentDelta;
+					}
+
+					// Traverse mixingFrom chain.
+					next = entry;
+					entry = entry.MixingFrom;
 				}
-				else {
-					mix = next.mixTime / next.mixDuration;
-					if (mix > 1) mix = 1;
-				}
-				float mixAndAlpha = track.alpha * next.interruptAlpha * (1 - mix);
-				currentDelta *= mixAndAlpha;
 			}
-			else {
-				if (track.mixDuration == 0) {
-					mix = 1;
-				}
-				else {
-					mix = track.alpha * (track.mixTime / track.mixDuration);
-					if (mix > 1) mix = 1;
-				}
-				currentDelta *= mix;
+			return localDelta;
+		}
+
+		void ApplyMixAlphaToDelta (ref Vector2 currentDelta, TrackEntry next, TrackEntry entry) {
+			float mixAlpha = 1;
+			GetMixAlpha(ref mixAlpha, next, entry);
+			currentDelta *= mixAlpha;
+		}
+
+		void ApplyMixAlphaToDelta (ref float currentDelta, TrackEntry next, TrackEntry entry) {
+			float mixAlpha = 1;
+			GetMixAlpha(ref mixAlpha, next, entry);
+			currentDelta *= mixAlpha;
+		}
+
+		void GetMixAlpha (ref float cumulatedMixAlpha, TrackEntry next, TrackEntry entry) {
+			// code below based on AnimationState.cs
+			if (next != null) {
+				float mix = next.MixDuration == 0 ? 1 : Mathf.Min(1, next.MixTime / next.MixDuration);
+				float fromMix = (entry.MixingFrom == null || entry.MixDuration == 0) ?
+					1 : Mathf.Min(1, entry.MixTime / entry.MixDuration);
+				float mixAndAlpha = entry.Alpha * fromMix * (1 - mix);
+				cumulatedMixAlpha *= mixAndAlpha;
+			} else {
+				float mix = entry.MixDuration == 0 ? 1 : Mathf.Min(1, entry.Alpha * (entry.MixTime / entry.MixDuration));
+				cumulatedMixAlpha *= mix;
 			}
 		}
 	}

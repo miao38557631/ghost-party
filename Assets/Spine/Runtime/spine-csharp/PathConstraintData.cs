@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -30,28 +30,28 @@
 using System;
 
 namespace Spine {
-	public class PathConstraintData : ConstraintData {
+	public class PathConstraintData : ConstraintData<PathConstraint, PathConstraintPose> {
 		internal ExposedList<BoneData> bones = new ExposedList<BoneData>();
-		internal SlotData target;
+		internal SlotData slot;
 		internal PositionMode positionMode;
 		internal SpacingMode spacingMode;
 		internal RotateMode rotateMode;
 		internal float offsetRotation;
-		internal float position, spacing, rotateMix, translateMix;
 
-		public PathConstraintData (string name) : base(name) {
+		public PathConstraintData (string name)
+			: base(name, new PathConstraintPose()) {
+		}
+
+		override public IConstraint Create (Skeleton skeleton) {
+			return new PathConstraint(this, skeleton);
 		}
 
 		public ExposedList<BoneData> Bones { get { return bones; } }
-		public SlotData Target { get { return target; } set { target = value; } }
+		public SlotData Slot { get { return slot; } set { slot = value; } }
 		public PositionMode PositionMode { get { return positionMode; } set { positionMode = value; } }
 		public SpacingMode SpacingMode { get { return spacingMode; } set { spacingMode = value; } }
 		public RotateMode RotateMode { get { return rotateMode; } set { rotateMode = value; } }
 		public float OffsetRotation { get { return offsetRotation; } set { offsetRotation = value; } }
-		public float Position { get { return position; } set { position = value; } }
-		public float Spacing { get { return spacing; } set { spacing = value; } }
-		public float RotateMix { get { return rotateMix; } set { rotateMix = value; } }
-		public float TranslateMix { get { return translateMix; } set { translateMix = value; } }
 	}
 
 	public enum PositionMode {
@@ -59,7 +59,7 @@ namespace Spine {
 	}
 
 	public enum SpacingMode {
-		Length, Fixed, Percent
+		Length, Fixed, Percent, Proportional
 	}
 
 	public enum RotateMode {

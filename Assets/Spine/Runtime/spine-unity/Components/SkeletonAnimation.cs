@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -31,102 +31,35 @@
 #define NEW_PREFAB_SYSTEM
 #endif
 
+#if UNITY_2017_1_OR_NEWER
+#define BUILT_IN_SPRITE_MASK_COMPONENT
+#endif
+
+#if !SPINE_DISABLE_THREADING && !UNITY_WEBGL
+#define USE_THREADED_ANIMATION_UPDATE
+#endif
+
+#if !SPINE_AUTO_UPGRADE_COMPONENTS_OFF
+#define AUTO_UPGRADE_TO_43_COMPONENTS
+#endif
+
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Spine.Unity {
 
-	#if NEW_PREFAB_SYSTEM
+#if NEW_PREFAB_SYSTEM
 	[ExecuteAlways]
-	#else
+#else
 	[ExecuteInEditMode]
-	#endif
+#endif
 	[AddComponentMenu("Spine/SkeletonAnimation")]
 	[HelpURL("http://esotericsoftware.com/spine-unity#SkeletonAnimation-Component")]
-	public class SkeletonAnimation : SkeletonRenderer, ISkeletonAnimation, IAnimationStateComponent {
-
-		#region IAnimationStateComponent
-		/// <summary>
-		/// This is the Spine.AnimationState object of this SkeletonAnimation. You can control animations through it.
-		/// Note that this object, like .skeleton, is not guaranteed to exist in Awake. Do all accesses and caching to it in Start</summary>
-		public Spine.AnimationState state;
-		/// <summary>
-		/// This is the Spine.AnimationState object of this SkeletonAnimation. You can control animations through it.
-		/// Note that this object, like .skeleton, is not guaranteed to exist in Awake. Do all accesses and caching to it in Start</summary>
-		public Spine.AnimationState AnimationState {
-			get {
-				Initialize(false);
-				return this.state;
-			}
-		}
-		private bool wasUpdatedAfterInit = true;
-		#endregion
-
-		#region Bone Callbacks ISkeletonAnimation
-		protected event UpdateBonesDelegate _BeforeApply;
-		protected event UpdateBonesDelegate _UpdateLocal;
-		protected event UpdateBonesDelegate _UpdateWorld;
-		protected event UpdateBonesDelegate _UpdateComplete;
-
-		/// <summary>
-		/// Occurs before the animations are applied.
-		/// Use this callback when you want to change the skeleton state before animations are applied on top.
-		/// </summary>
-		public event UpdateBonesDelegate BeforeApply { add { _BeforeApply += value; } remove { _BeforeApply -= value; } }
-
-		/// <summary>
-		/// Occurs after the animations are applied and before world space values are resolved.
-		/// Use this callback when you want to set bone local values.
-		/// </summary>
-		public event UpdateBonesDelegate UpdateLocal { add { _UpdateLocal += value; } remove { _UpdateLocal -= value; } }
-
-		/// <summary>
-		/// Occurs after the Skeleton's bone world space values are resolved (including all constraints).
-		/// Using this callback will cause the world space values to be solved an extra time.
-		/// Use this callback if want to use bone world space values, and also set bone local values.</summary>
-		public event UpdateBonesDelegate UpdateWorld { add { _UpdateWorld += value; } remove { _UpdateWorld -= value; } }
-
-		/// <summary>
-		/// Occurs after the Skeleton's bone world space values are resolved (including all constraints).
-		/// Use this callback if you want to use bone world space values, but don't intend to modify bone local values.
-		/// This callback can also be used when setting world position and the bone matrix.</summary>
-		public event UpdateBonesDelegate UpdateComplete { add { _UpdateComplete += value; } remove { _UpdateComplete -= value; } }
-		#endregion
+	public class SkeletonAnimation : SkeletonAnimationBase, IAnimationStateComponent, IUpgradable {
 
 		#region Serialized state and Beginner API
-		[SerializeField]
-		[SpineAnimation]
-		private string _animationName;
-
-		/// <summary>
-		/// Setting this property sets the animation of the skeleton. If invalid, it will store the animation name for the next time the skeleton is properly initialized.
-		/// Getting this property gets the name of the currently playing animation. If invalid, it will return the last stored animation name set through this property.</summary>
-		public string AnimationName {
-			get {
-				if (!valid) {
-					return _animationName;
-				} else {
-					TrackEntry entry = state.GetCurrent(0);
-					return entry == null ? null : entry.Animation.Name;
-				}
-			}
-			set {
-				Initialize(false);
-				if (_animationName == value) {
-					TrackEntry entry = state.GetCurrent(0);
-					if (entry != null && entry.loop == loop)
-						return;
-				}
-				_animationName = value;
-
-				if (string.IsNullOrEmpty(value)) {
-					state.ClearTrack(0);
-				} else {
-					var animationObject = skeletonDataAsset.GetSkeletonData(false).FindAnimation(value);
-					if (animationObject != null)
-						state.SetAnimation(0, animationObject, loop);
-				}
-			}
-		}
+		[FormerlySerializedAs("_animationName")] [SerializeField] [SpineAnimation] protected string animationName = "";
 
 		/// <summary>Whether or not <see cref="AnimationName"/> should loop. This only applies to the initial animation specified in the inspector, or any subsequent Animations played through .AnimationName. Animations set through state.SetAnimation are unaffected.</summary>
 		public bool loop;
@@ -135,117 +68,316 @@ namespace Spine.Unity {
 		/// The rate at which animations progress over time. 1 means 100%. 0.5 means 50%.</summary>
 		/// <remarks>AnimationState and TrackEntry also have their own timeScale. These are combined multiplicatively.</remarks>
 		public float timeScale = 1;
+
+		/// <summary>If enabled, AnimationState time is advanced by Unscaled Game Time
+		/// (<c>Time.unscaledDeltaTime</c> instead of the default Game Time(<c>Time.deltaTime</c>).
+		/// to animate independent of game <c>Time.timeScale</c>.
+		/// Instance timeScale will still be applied.</summary>
+		public bool unscaledTime;
 		#endregion
 
-		#region Runtime Instantiation
-		/// <summary>Adds and prepares a SkeletonAnimation component to a GameObject at runtime.</summary>
-		/// <returns>The newly instantiated SkeletonAnimation</returns>
-		public static SkeletonAnimation AddToGameObject (GameObject gameObject, SkeletonDataAsset skeletonDataAsset,
-			bool quiet = false) {
-			return SkeletonRenderer.AddSpineComponent<SkeletonAnimation>(gameObject, skeletonDataAsset, quiet);
+		public override void MainThreadBeforeUpdateInternal () {
+			base.MainThreadBeforeUpdateInternal();
+#if USE_THREADED_ANIMATION_UPDATE
+			if (isUpdatedExternally) {
+				if (state != null) state.DelayListenerNotifications();
+			}
+#endif
 		}
 
-		/// <summary>Instantiates a new UnityEngine.GameObject and adds a prepared SkeletonAnimation component to it.</summary>
-		/// <returns>The newly instantiated SkeletonAnimation component.</returns>
-		public static SkeletonAnimation NewSkeletonAnimationGameObject (SkeletonDataAsset skeletonDataAsset,
-			bool quiet = false) {
-			return SkeletonRenderer.NewSpineGameObject<SkeletonAnimation>(skeletonDataAsset, quiet);
+		public override void MainThreadAfterUpdateInternal () {
+			base.MainThreadAfterUpdateInternal();
+
+#if USE_THREADED_ANIMATION_UPDATE
+			if (isUpdatedExternally) {
+				if (state != null) state.IssueDelayedListenerNotifications();
+			}
+#endif
+		}
+
+		protected Spine.AnimationState state;
+
+		/// <summary>
+		/// This is the Spine.AnimationState object of this SkeletonAnimation. You can control animations through it.
+		/// Note that this object, like .skeleton, is not guaranteed to exist in Awake. Do all accesses and caching to it in Start</summary>
+		public Spine.AnimationState AnimationState {
+			get {
+				Initialize(false);
+				return state;
+			}
+			set { state = value; }
+		}
+
+		public override bool IsValid {
+			get { return skeletonRenderer != null && skeletonRenderer.IsValid && state != null; }
+		}
+
+		public bool UnscaledTime { get { return unscaledTime; } set { unscaledTime = value; } }
+
+		#region Serialized state and Beginner API
+		/// <summary>
+		/// Setting this property sets the animation of the skeleton. If invalid, it will store the animation name for the next time the skeleton is properly initialized.
+		/// Getting this property gets the name of the currently playing animation. If invalid, it will return the last stored animation name set through this property.</summary>
+		public string AnimationName {
+			get {
+				if (!this.IsValid) {
+					return animationName;
+				} else {
+					TrackEntry entry = state.GetTrack(0);
+					return entry == null ? null : entry.Animation.Name;
+				}
+			}
+			set {
+				Initialize(false);
+				if (!IsValid) {
+					animationName = value;
+					return;
+				}
+
+				if (animationName == value) {
+					TrackEntry entry = state.GetTrack(0);
+					if (entry != null && entry.Loop == loop && entry.Animation.Name == value)
+						return;
+				}
+				animationName = value;
+
+				if (string.IsNullOrEmpty(value)) {
+					state.ClearTrack(0);
+				} else {
+					SkeletonData skeletonData = skeletonRenderer.SkeletonDataAsset.GetSkeletonData(false);
+					if (skeletonData == null)
+						return;
+					Spine.Animation animationObject = skeletonData.FindAnimation(value);
+					if (animationObject != null)
+						state.SetAnimation(0, animationObject, loop);
+				}
+			}
 		}
 		#endregion
 
 		/// <summary>
 		/// Clears the previously generated mesh, resets the skeleton's pose, and clears all previously active animations.</summary>
-		public override void ClearState () {
-			base.ClearState();
+		public override void ClearAnimationState () {
 			if (state != null) state.ClearTracks();
 		}
 
-		/// <summary>
-		/// Initialize this component. Attempts to load the SkeletonData and creates the internal Spine objects and buffers.</summary>
-		/// <param name="overwrite">If set to <c>true</c>, force overwrite an already initialized object.</param>
-		public override void Initialize (bool overwrite, bool quiet = false) {
-			if (valid && !overwrite)
+		public override void InitializeAnimationComponent () {
+			base.InitializeAnimationComponent();
+			if (!skeletonRenderer.IsValid)
 				return;
-			base.Initialize(overwrite, quiet);
 
-			if (!valid)
+			AnimationStateData data = skeletonRenderer.SkeletonDataAsset.GetAnimationStateData();
+
+#if UNITY_EDITOR
+			AnimationState oldAnimationState = state;
+#endif
+			state = new Spine.AnimationState(data);
+			state.Dispose += OnAnimationDisposed;
+			if (state == null)
 				return;
-			state = new Spine.AnimationState(skeletonDataAsset.GetAnimationStateData());
-			wasUpdatedAfterInit = false;
+#if UNITY_EDITOR
+			if (oldAnimationState != null)
+				state.AssignEventSubscribersFrom(oldAnimationState);
+#endif
+			UpdateInitialAnimation();
+		}
 
-			if (!string.IsNullOrEmpty(_animationName)) {
-				var animationObject = skeletonDataAsset.GetSkeletonData(false).FindAnimation(_animationName);
-				if (animationObject != null) {
-					state.SetAnimation(0, animationObject, loop);
-					#if UNITY_EDITOR
-					if (!Application.isPlaying)
+		protected virtual void OnAnimationDisposed (TrackEntry entry) {
+			// when updateMode disables applying animations, still ensure animations are mixed out
+			UpdateMode updateMode = skeletonRenderer.UpdateMode;
+			if (updateMode != UpdateMode.FullUpdate &&
+				updateMode != UpdateMode.EverythingExceptMesh) {
+				entry.Animation.Apply(skeleton, 0, 0, false, null, 0f, MixFrom.Setup, false, true, false);
+			}
+		}
+
+		public virtual void UpdateInitialAnimation () {
+			state.ClearTrack(0);
+			if (!string.IsNullOrEmpty(animationName)) {
+				SkeletonData skeletonData = skeletonRenderer.SkeletonDataAsset.GetSkeletonData(false);
+				if (skeletonData == null)
+					return;
+				Spine.Animation animation = skeletonData.FindAnimation(animationName);
+				if (animation != null) {
+					state.SetAnimation(0, animation, loop);
+#if UNITY_EDITOR
+					if (!ApplicationIsPlaying)
 						Update(0f);
-					#endif
+#endif
 				}
 			}
 		}
 
-		void Update () {
-			#if UNITY_EDITOR
-			if (!Application.isPlaying) {
-				Update(0f);
-				return;
+#if USE_THREADED_ANIMATION_UPDATE
+		public override float UsedExternalDeltaTime {
+			get {
+				return unscaledTime ? ExternalUnscaledDeltaTime : ExternalDeltaTime;
 			}
-			#endif
-
-			Update(Time.deltaTime);
+		}
+#endif
+		protected override float DeltaTime {
+			get {
+				return unscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+			}
 		}
 
-		/// <summary>Progresses the AnimationState according to the given deltaTime, and applies it to the Skeleton. Use Time.deltaTime to update manually. Use deltaTime 0 to update without progressing the time.</summary>
-		public void Update (float deltaTime) {
-			if (!valid || state == null)
-				return;
-
-			wasUpdatedAfterInit = true;
-			if (updateMode < UpdateMode.OnlyAnimationStatus)
-				return;
-			UpdateAnimationStatus(deltaTime);
-
-			if (updateMode == UpdateMode.OnlyAnimationStatus)
-				return;
-			ApplyAnimation();
-		}
-
-		protected void UpdateAnimationStatus (float deltaTime) {
+		protected override void UpdateAnimationStatus (float deltaTime) {
 			deltaTime *= timeScale;
-			skeleton.Update(deltaTime);
-			state.Update(deltaTime);
+			if (state != null) {
+				state.Update(deltaTime);
+				skeleton.Update(deltaTime);
+#if UNITY_EDITOR
+				if (ApplicationIsPlaying)
+					UpdatePropertyToCurrentAnimationEditor();
+#endif
+				if (skeletonRenderer.UpdateMode == UpdateMode.OnlyAnimationStatus) {
+					state.ApplyEventTimelinesOnly(skeleton, issueEvents: false);
+				}
+			}
 		}
 
-		protected void ApplyAnimation () {
-			if (_BeforeApply != null)
-				_BeforeApply(this);
-
-			if (updateMode != UpdateMode.OnlyEventTimelines)
-				state.Apply(skeleton);
+		protected override void ApplyStateToSkeleton (bool calledFromMainThread) {
+			if (skeletonRenderer.UpdateMode != UpdateMode.OnlyEventTimelines)
+				state.Apply(skeletonRenderer.Skeleton);
 			else
-				state.ApplyEventTimelinesOnly(skeleton);
+				state.ApplyEventTimelinesOnly(skeletonRenderer.Skeleton, issueEvents: true);
+		}
 
-			if (_UpdateLocal != null)
-				_UpdateLocal(this);
+#if UNITY_EDITOR
+		protected void UpdatePropertyToCurrentAnimationEditor () {
+			if (state.Tracks.Count == 0 || state.Tracks.Items[0] == null)
+				return;
+			Animation currentAnimation = state.Tracks.Items[0].Animation;
+			animationName = currentAnimation == null ? "<None>" : currentAnimation.Name;
+		}
+#endif
 
-			skeleton.UpdateWorldTransform();
 
-			if (_UpdateWorld != null) {
-				_UpdateWorld(this);
-				skeleton.UpdateWorldTransform();
-			}
 
-			if (_UpdateComplete != null) {
-				_UpdateComplete(this);
+		#region Runtime Instantiation
+		/// <summary>Adds and prepares SkeletonAnimation and SkeletonRenderer components to a GameObject at runtime.</summary>
+		/// <returns>A struct referencing the newly instantiated SkeletonAnimation and SkeletonRenderer components.</returns>
+		public static SkeletonComponents<SkeletonRenderer, SkeletonAnimation> AddToGameObject (
+			GameObject gameObject, SkeletonDataAsset skeletonDataAsset, bool quiet = false) {
+
+			return Spine.Unity.SkeletonRenderer.AddSpineComponents<SkeletonRenderer, SkeletonAnimation>(
+				gameObject, skeletonDataAsset, quiet);
+		}
+
+		/// <summary>Instantiates a new UnityEngine.GameObject and adds SkeletonAnimation and SkeletonRenderer components to it.</summary>
+		/// <returns>A struct referencing the newly instantiated SkeletonAnimation and SkeletonRenderer components.</returns>
+		public static SkeletonComponents<SkeletonRenderer, SkeletonAnimation> NewSkeletonAnimationGameObject (SkeletonDataAsset skeletonDataAsset,
+			bool quiet = false) {
+			return Spine.Unity.SkeletonRenderer.NewSpineGameObject<SkeletonRenderer, SkeletonAnimation>(
+				skeletonDataAsset, quiet);
+		}
+		#endregion
+
+		#region Transfer of Deprecated Fields
+#if UNITY_EDITOR && AUTO_UPGRADE_TO_43_COMPONENTS
+		// compatibility layer for new split animation component architecture, automatically transfer serialized attributes.
+		public override void UpgradeTo43 () {
+			if (!Application.isPlaying && !wasDeprecatedTransferred) {
+				UpgradeTo43Components();
+				TransferDeprecatedFields();
+				InitializeAnimationComponent();
 			}
 		}
 
-		public override void LateUpdate () {
-			// instantiation can happen from Update() after this component, leading to a missing Update() call.
-			if (!wasUpdatedAfterInit) Update(0);
-			base.LateUpdate();
+		protected void UpgradeTo43Components () {
+			if (gameObject.GetComponent<SkeletonRenderer>() == null &&
+				gameObject.GetComponent<SkeletonGraphic>() == null) {
+				gameObject.AddComponent<SkeletonRenderer>();
+				EditorBridge.RequestMarkDirty(gameObject);
+				Debug.Log(string.Format("{0}: Auto-migrated old SkeletonAnimation component to split SkeletonAnimation + SkeletonRenderer components.",
+					gameObject.name), gameObject);
+			}
 		}
+
+		/// <summary>Transfer of former base class SkeletonRenderer parameters.</summary>
+		protected void TransferDeprecatedFields () {
+			wasDeprecatedTransferred = true;
+			// No deprecated asset means no pre-split data (component created after the split or saved with
+			// auto-upgrade disabled). Transferring would overwrite the renderer's values with defaults.
+			if (this.skeletonDataAssetDeprecated == null)
+				return;
+
+			SkeletonRenderer skeletonRenderer = gameObject.GetComponent<SkeletonRenderer>();
+			if (skeletonRenderer == null)
+				return;
+
+			skeletonRenderer.skeletonDataAsset = this.skeletonDataAssetDeprecated;
+			skeletonRenderer.initialSkinName = this.initialSkinNameDeprecated;
+			skeletonRenderer.EditorSkipSkinSync = this.editorSkipSkinSyncDeprecated;
+			skeletonRenderer.fixPrefabOverrideViaMeshFilter = this.fixPrefabOverrideViaMeshFilterDeprecated;
+			skeletonRenderer.initialFlipX = this.initialFlipXDeprecated;
+			skeletonRenderer.initialFlipY = this.initialFlipYDeprecated;
+			skeletonRenderer.UpdateMode = this.updateModeDeprecated;
+			skeletonRenderer.updateWhenInvisible = this.updateWhenInvisibleDeprecated;
+			skeletonRenderer.separatorSlotNames = this.separatorSlotNamesDeprecated;
+
+			skeletonRenderer.MeshSettings.zSpacing = this.zSpacingDeprecated;
+			skeletonRenderer.MeshSettings.useClipping = this.useClippingDeprecated;
+			skeletonRenderer.MeshSettings.immutableTriangles = this.immutableTrianglesDeprecated;
+			skeletonRenderer.MeshSettings.pmaVertexColors = this.pmaVertexColorsDeprecated;
+			skeletonRenderer.MeshSettings.tintBlack = this.tintBlackDeprecated;
+			skeletonRenderer.MeshSettings.addNormals = this.addNormalsDeprecated;
+			skeletonRenderer.MeshSettings.calculateTangents = this.calculateTangentsDeprecated;
+
+			skeletonRenderer.clearStateOnDisable = this.clearStateOnDisableDeprecated;
+			skeletonRenderer.singleSubmesh = this.singleSubmeshDeprecated;
+#if UNITY_2018_1_OR_NEWER
+			skeletonRenderer.fixDrawOrder = this.fixDrawOrderDeprecated;
+#endif
+			skeletonRenderer.MaskInteraction = this.maskInteractionDeprecated;
+			skeletonRenderer.disableRenderingOnOverride = this.disableRenderingOnOverrideDeprecated;
+			skeletonRenderer.PhysicsPositionInheritanceFactor = this.physicsPositionInheritanceFactorDeprecated;
+			skeletonRenderer.PhysicsRotationInheritanceFactor = this.physicsRotationInheritanceFactorDeprecated;
+			skeletonRenderer.PhysicsMovementRelativeTo = this.physicsMovementRelativeToDeprecated;
+		}
+
+		[SerializeField] protected bool wasDeprecatedTransferred = false;
+		// SkeletonRenderer former base class parameters
+		[FormerlySerializedAs("skeletonDataAsset")] [SerializeField] private SkeletonDataAsset skeletonDataAssetDeprecated;
+
+		[FormerlySerializedAs("initialSkinName")] [SpineSkin(defaultAsEmptyString: true)] [SerializeField] private string initialSkinNameDeprecated;
+		[FormerlySerializedAs("editorSkipSkinSync")] [SerializeField] private bool editorSkipSkinSyncDeprecated = false;
+		[FormerlySerializedAs("fixPrefabOverrideViaMeshFilter")] [SerializeField]
+		private SettingsTriState fixPrefabOverrideViaMeshFilterDeprecated = SettingsTriState.UseGlobalSetting;
+		[FormerlySerializedAs("initialFlipX")] [SerializeField] private bool initialFlipXDeprecated = false;
+		[FormerlySerializedAs("initialFlipY")] [SerializeField] private bool initialFlipYDeprecated = false;
+		[FormerlySerializedAs("updateMode")] [SerializeField] private UpdateMode updateModeDeprecated = UpdateMode.FullUpdate;
+		[FormerlySerializedAs("updateWhenInvisible")] [SerializeField] private UpdateMode updateWhenInvisibleDeprecated = UpdateMode.FullUpdate;
+		[UnityEngine.Serialization.FormerlySerializedAs("submeshSeparators"),
+			UnityEngine.Serialization.FormerlySerializedAs("separatorSlotNames")]
+		[SerializeField] private string[] separatorSlotNamesDeprecated = new string[0];
+
+		[FormerlySerializedAs("zSpacing")] [SerializeField] private float zSpacingDeprecated = 0f;
+		[FormerlySerializedAs("useClipping")] [SerializeField] private bool useClippingDeprecated = true;
+		[FormerlySerializedAs("immutableTriangles")] [SerializeField] private bool immutableTrianglesDeprecated = false;
+		[FormerlySerializedAs("pmaVertexColors")] [SerializeField] private bool pmaVertexColorsDeprecated = true;
+		[FormerlySerializedAs("clearStateOnDisable")] [SerializeField] private bool clearStateOnDisableDeprecated = false;
+		[FormerlySerializedAs("tintBlack")] [SerializeField] private bool tintBlackDeprecated = false;
+		[FormerlySerializedAs("singleSubmesh")] [SerializeField] private bool singleSubmeshDeprecated = false;
+#if UNITY_2018_1_OR_NEWER
+		[FormerlySerializedAs("fixDrawOrder")] [SerializeField] private bool fixDrawOrderDeprecated = false;
+#endif
+		[FormerlySerializedAs("calculateNormals"),
+			FormerlySerializedAs("addNormals")]
+		[SerializeField] private bool addNormalsDeprecated = false;
+		[FormerlySerializedAs("calculateTangents")] [SerializeField] private bool calculateTangentsDeprecated = false;
+		[FormerlySerializedAs("disableRenderingOnOverride")] [SerializeField] private bool disableRenderingOnOverrideDeprecated = true;
+		[FormerlySerializedAs("physicsPositionInheritanceFactor")] [SerializeField]
+		private Vector2 physicsPositionInheritanceFactorDeprecated = Vector2.one;
+		[FormerlySerializedAs("physicsRotationInheritanceFactor")] [SerializeField]
+		private float physicsRotationInheritanceFactorDeprecated = 1.0f;
+		[FormerlySerializedAs("physicsMovementRelativeTo")] [SerializeField]
+		private Transform physicsMovementRelativeToDeprecated = null;
+
+#if BUILT_IN_SPRITE_MASK_COMPONENT
+		[FormerlySerializedAs("maskInteraction")] [SerializeField] private SpriteMaskInteraction maskInteractionDeprecated = SpriteMaskInteraction.None;
+#endif // BUILT_IN_SPRITE_MASK_COMPONENT
+#endif // UNITY_EDITOR && AUTO_UPGRADE_TO_43_COMPONENTS
+		#endregion
 	}
-
 }

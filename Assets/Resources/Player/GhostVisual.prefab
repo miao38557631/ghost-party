@@ -125,4 +125,13 @@ MonoBehaviour:
   idlePlaybackSpeed: 1
   walkPlaybackSpeed: 1
   movementThreshold: 0.01
+  artworkFacesRight: 1
+  facingDeadzone: 0.01
   faceCamera: 1
+  useSpineVisual: 1
+  spineSkeletonData: {fileID: 11400000, guid: 889e60aebe407514cbceed88795d42ba, type: 2}
+  spineIdleAnimation: idle
+  spineWalkAnimation: walk
+  spineVerticalOffset: 0
+  stairVisualSmoothTime: 0.15
+  spinePlaybackSpeed: 1

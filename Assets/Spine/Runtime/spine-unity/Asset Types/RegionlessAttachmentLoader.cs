@@ -1,8 +1,8 @@
 /******************************************************************************
  * Spine Runtimes License Agreement
- * Last updated January 1, 2020. Replaces all prior versions.
+ * Last updated April 5, 2025. Replaces all prior versions.
  *
- * Copyright (c) 2013-2020, Esoteric Software LLC
+ * Copyright (c) 2013-2026, Esoteric Software LLC
  *
  * Integration of the Spine Runtimes into software or otherwise creating
  * derivative works of the Spine Runtimes is permitted under the terms and
@@ -38,11 +38,17 @@ namespace Spine.Unity {
 		static AtlasRegion EmptyRegion {
 			get {
 				if (emptyRegion == null) {
+					Shader hiddenShader = Shader.Find("Spine/Special/HiddenPass");
+					if (hiddenShader == null) {
+						Debug.LogError("Shader \"Spine/Special/HiddenPass\" not found while loading SkeletonDataAsset" +
+							" with 0 Atlas Assets. Please add this shader to Project Settings - Graphics - Always" +
+							" Included Shaders, or make sure your SkeletonDataAssets all have an AtlasAsset assigned.");
+					}
 					emptyRegion = new AtlasRegion {
 						name = "Empty AtlasRegion",
 						page = new AtlasPage {
 							name = "Empty AtlasPage",
-							rendererObject = new Material(Shader.Find("Spine/Special/HiddenPass")) { name = "NoRender Material" }
+							rendererObject = new Material(hiddenShader) { name = "NoRender Material" }
 						}
 					};
 				}
@@ -50,33 +56,29 @@ namespace Spine.Unity {
 			}
 		}
 
-		public RegionAttachment NewRegionAttachment (Skin skin, string name, string path) {
-			RegionAttachment attachment = new RegionAttachment(name) {
-				RendererObject = EmptyRegion
-			};
+		public RegionAttachment NewRegionAttachment (Skin skin, string placeholder, string name, string path, Sequence sequence) {
+			RegionAttachment attachment = new RegionAttachment(name, new Sequence(1, false));
 			return attachment;
 		}
 
-		public MeshAttachment NewMeshAttachment (Skin skin, string name, string path) {
-			MeshAttachment attachment = new MeshAttachment(name) {
-				RendererObject = EmptyRegion
-			};
+		public MeshAttachment NewMeshAttachment (Skin skin, string placeholder, string name, string path, Sequence sequence) {
+			MeshAttachment attachment = new MeshAttachment(name, new Sequence(1, false));
 			return attachment;
 		}
 
-		public BoundingBoxAttachment NewBoundingBoxAttachment (Skin skin, string name) {
+		public BoundingBoxAttachment NewBoundingBoxAttachment (Skin skin, string placeholder, string name) {
 			return new BoundingBoxAttachment(name);
 		}
 
-		public PathAttachment NewPathAttachment (Skin skin, string name) {
+		public PathAttachment NewPathAttachment (Skin skin, string placeholder, string name) {
 			return new PathAttachment(name);
 		}
 
-		public PointAttachment NewPointAttachment (Skin skin, string name) {
+		public PointAttachment NewPointAttachment (Skin skin, string placeholder, string name) {
 			return new PointAttachment(name);
 		}
 
-		public ClippingAttachment NewClippingAttachment (Skin skin, string name) {
+		public ClippingAttachment NewClippingAttachment (Skin skin, string placeholder, string name) {
 			return new ClippingAttachment(name);
 		}
 	}
