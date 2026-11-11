@@ -1,0 +1,6 @@
+Curtain.png
+size:153,380
+filter:Linear,Linear
+scale:0.9
+R curtain
+bounds:2,2,149,376
