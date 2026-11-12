@@ -20,9 +20,12 @@ using UnityEngine.InputSystem;
 /// - Pointer projection is camera-ray/curtain-plane based (local Spine XY).
 ///   The prank's gesture thresholds currently use screen-space mouse delta;
 ///   keep that distinction when connecting the two systems.
-/// - Bone1/2 bend only slightly. Bone3's origin is the pinned lower-chain
-///   pivot; Bone3..8 use original lengths. A held tip follows the target
+/// - Bone1/2/3 have separate bend limits, increasing down the curtain.
+///   Bone4's origin is the pinned lower-chain pivot; Bone4..8 use original
+///   lengths. A held tip follows the target
 ///   directly within reach; releaseSpring/releaseDamping return it to rest.
+///   Projected gravity adds a small, delayed sag to the inner guide nodes and
+///   assists the tip's fall after release. It never moves the held tip.
 /// - The current export has one mesh. Drag_Ctrl/L_Ctrl/R_Ctrl have zero mesh
 ///   weights, so extreme folds can overlap black outlines and the visible
 ///   hem is not guaranteed to coincide with the solved M_Bone8 tip. This is
@@ -32,24 +35,45 @@ using UnityEngine.InputSystem;
 [DefaultExecutionOrder(-100)]
 public sealed class SpineCurtainDragIK : MonoBehaviour
 {
-    [SerializeField] private SkeletonDataAsset skeletonDataAsset;
-    [SerializeField] private string leftRoot = "L_Bone";
-    [SerializeField] private string middleRoot = "M_Bone";
-    [SerializeField] private string rightRoot = "R_Bone";
-    [SerializeField, Min(0.1f)] private float grabRadius = 0.48f;
-    [SerializeField, Range(4, 64)] private int solverIterations = 48;
-    [SerializeField, Range(0f, 2f)] private float bendHint = 0.65f;
-    [SerializeField, Range(0f, 3f)] private float elbowDownBias = 2f;
-    [SerializeField, Range(0.1f, 0.6f)] private float sideSwitchWidth = 0.3f;
-    [SerializeField, Range(2f, 20f)] private float releaseSpring = 7f;
-    [SerializeField, Range(0.1f, 1f)] private float releaseDamping = 0.36f;
-    [SerializeField, Range(0f, 0.5f)] private float rippleStrength = 0.28f;
-    [SerializeField, Range(0.5f, 10f)] private float rippleFrequency = 3.5f;
-    [SerializeField, Range(0.1f, 12f)] private float rippleDecay = 2f;
-    [SerializeField, Range(0f, 15f)] private float upperBendDegrees = 8f;
+    [SerializeField, Tooltip("窗帘的 Spine 骨架资源；缺少它时样机无法显示。")]
+    private SkeletonDataAsset skeletonDataAsset;
+    [SerializeField, Tooltip("左侧骨骼链的名称前缀，对应 Spine 中的 L_Bone 系列。")]
+    private string leftRoot = "L_Bone";
+    [SerializeField, Tooltip("中间骨骼链的名称前缀，对应 Spine 中的 M_Bone 系列。")]
+    private string middleRoot = "M_Bone";
+    [SerializeField, Tooltip("右侧骨骼链的名称前缀，对应 Spine 中的 R_Bone 系列。")]
+    private string rightRoot = "R_Bone";
+    [SerializeField, Min(0.1f), Tooltip("鼠标按下时，距离窗帘下端抓取点多近才能抓住；单位为窗帘局部坐标。越大越容易抓。")]
+    private float grabRadius = 0.48f;
+    [SerializeField, Range(4, 64), Tooltip("每帧校正骨骼长度的次数。越高越不容易拉伸，但计算量也越大。")]
+    private int solverIterations = 48;
+    [SerializeField, Range(0f, 2f), Tooltip("拖动时向左或向右鼓起的倾向。越大，窗帘下半段越往侧面弯。")]
+    private float bendHint = 0.65f;
+    [SerializeField, Range(0f, 3f), Tooltip("拖动时中段向下弯成 U 形的倾向。越大，中段越往下垂。")]
+    private float elbowDownBias = 2f;
+    [SerializeField, Range(0.1f, 0.6f), Tooltip("左右折叠方向在中间切换的宽度。越大，换向越平缓；越小，换向越快。")]
+    private float sideSwitchWidth = 0.3f;
+    [SerializeField, Range(2f, 20f), Tooltip("松开鼠标后回到垂落位置的弹力。越大，回位越快。")]
+    private float releaseSpring = 7f;
+    [SerializeField, Range(0.1f, 1f), Tooltip("松手回位时的阻尼。越大，来回摆动越少、越快停稳。")]
+    private float releaseDamping = 0.36f;
+    [SerializeField, Range(0f, 20f), Tooltip("重力强度。增加后，下半段的下垂更明显，松手下落也稍快；设为 0 可关闭新增的重力效果。")]
+    private float gravityAcceleration = 8f;
+    [SerializeField, Range(0f, 0.5f), Tooltip("拖动或松手产生的余波最大强度。越大，尾部摆动越明显。")]
+    private float rippleStrength = 0.28f;
+    [SerializeField, Range(0.5f, 10f), Tooltip("余波每秒摆动的次数。越大，摆动越快。")]
+    private float rippleFrequency = 3.5f;
+    [SerializeField, Range(0.1f, 12f), Tooltip("余波消失的速度。越大，摆动越快停下。")]
+    private float rippleDecay = 2f;
+    [SerializeField, Range(0f, 15f), Tooltip("最上方 Bone1 的最大附加转角，单位为度。默认 0.5°，几乎不晃；设为 0 就固定。")]
+    private float bone1BendDegrees = 0.5f;
+    [SerializeField, Range(0f, 20f), Tooltip("Bone2 的最大附加转角，单位为度。建议比 Bone1 大，让弯曲从顶部逐渐增加。")]
+    private float bone2BendDegrees = 4f;
+    [SerializeField, Range(0f, 30f), Tooltip("Bone3 的最大附加转角，单位为度。建议比 Bone2 大；Bone4 以下由自由求解接续弯曲。")]
+    private float bone3BendDegrees = 10f;
 
-    private const int FirstMovingBone = 2; // Bone3, at about half the curtain's height.
-    private const int MovingBones = 6;
+    private const int FirstMovingBone = 3; // Bone4 begins the unrestricted lower chain.
+    private const int MovingBones = 5;
     private readonly Bone[,] chains = new Bone[3, 8];
     private readonly Vector2[] restNodes = new Vector2[MovingBones + 1];
     private readonly Vector2[] nodes = new Vector2[MovingBones + 1];
@@ -71,6 +95,8 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
     private float restUpperWorldAngle;
     private float rippleAmplitude;
     private float ripplePhase;
+    private float gravitySag;
+    private float gravitySagVelocity;
     private float poleSide = 1f;
     private int lastBendSide = 1;
     private bool dragging;
@@ -138,7 +164,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         }
         pivot = restNodes[0];
         elbowPole = (pivot + restNodes[MovingBones]) * 0.5f;
-        restUpperWorldAngle = chains[1, 1].AppliedPose.WorldRotationX;
+        restUpperWorldAngle = chains[1, FirstMovingBone - 1].AppliedPose.WorldRotationX;
         restHem = restNodes[MovingBones];
         target = restHem;
         inputCamera = Camera.main;
@@ -215,7 +241,8 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         else
         {
             targetVelocity += ((desired - target) * (releaseSpring * releaseSpring)
-                - targetVelocity * (2f * releaseDamping * releaseSpring)) * dt;
+                - targetVelocity * (2f * releaseDamping * releaseSpring)
+                + GetPlanarGravity() * gravityAcceleration * 0.35f) * dt;
             targetVelocity = Vector2.ClampMagnitude(targetVelocity, 18f);
             target += targetVelocity * dt;
         }
@@ -260,6 +287,14 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
             ? pivot + fromPivot.normalized * maxReach : desired;
     }
 
+    private Vector2 GetPlanarGravity()
+    {
+        // InverseTransformDirection projects world gravity onto the curtain's
+        // own XY plane, so a rotated curtain still sags in the right direction.
+        Vector3 down = spineAnimation.transform.InverseTransformDirection(Vector3.down);
+        return new Vector2(down.x, down.y);
+    }
+
     private void UpdatePoleSide(float dt)
     {
         // A continuous pole direction avoids a branch change at the centre.
@@ -286,7 +321,8 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         skeleton.UpdateWorldTransform(Spine.Physics.None);
         Bone middlePivotBone = chains[1, FirstMovingBone];
         pivot = new Vector2(middlePivotBone.AppliedPose.WorldX, middlePivotBone.AppliedPose.WorldY);
-        float upperWorldDelta = Mathf.DeltaAngle(restUpperWorldAngle, chains[1, 1].AppliedPose.WorldRotationX);
+        float upperWorldDelta = Mathf.DeltaAngle(restUpperWorldAngle,
+            chains[1, FirstMovingBone - 1].AppliedPose.WorldRotationX);
         SolveLowerChainSmooth(ClampToReach(target));
 #if UNITY_EDITOR
         if (autoSweep)
@@ -328,13 +364,17 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
     {
         float horizontal = Mathf.Clamp((target.x - restHem.x) / maxReach, -1f, 1f);
         float lift = Mathf.Clamp01((target.y - restHem.y) / maxReach);
-        float turn = Mathf.Clamp(horizontal + poleSide * lift * 0.18f, -1f, 1f) * upperBendDegrees;
+        float turn = Mathf.Clamp(horizontal + poleSide * lift * 0.18f, -1f, 1f);
         for (int column = 0; column < 3; column++)
         {
-            Bone first = chains[column, 0];
-            Bone second = chains[column, 1];
-            first.Pose.Rotation = first.Data.GetSetupPose().Rotation + turn * 0.35f;
-            second.Pose.Rotation = second.Data.GetSetupPose().Rotation + turn * 0.65f;
+            for (int boneIndex = 0; boneIndex < FirstMovingBone; boneIndex++)
+            {
+                Bone bone = chains[column, boneIndex];
+                float bendLimit = boneIndex == 0 ? bone1BendDegrees
+                    : boneIndex == 1 ? bone2BendDegrees : bone3BendDegrees;
+                bone.Pose.Rotation = bone.Data.GetSetupPose().Rotation
+                    + turn * bendLimit;
+            }
         }
     }
 
@@ -345,6 +385,25 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         // no candidate U branch or final CCD correction can suddenly win.
         Vector2 span = goal - pivot;
         float distance = span.magnitude;
+        float slack = Mathf.Max(0f, maxReach - distance);
+        Vector2 planarGravity = GetPlanarGravity();
+        float dt = Mathf.Min(Time.deltaTime, 0.033f);
+        // A damped gravity displacement supplies weight without putting the
+        // endpoint on a spring. Available chain slack caps the displacement.
+        gravitySagVelocity += (gravityAcceleration * planarGravity.magnitude
+            - gravitySag * 36f - gravitySagVelocity * 9.6f) * dt;
+        gravitySag += gravitySagVelocity * dt;
+        float sagLimit = slack * 0.4f;
+        if (gravitySag > sagLimit)
+        {
+            gravitySag = sagLimit;
+            if (gravitySagVelocity > 0f) gravitySagVelocity = 0f;
+        }
+        if (gravitySag < 0f)
+        {
+            gravitySag = 0f;
+            if (gravitySagVelocity < 0f) gravitySagVelocity = 0f;
+        }
         if (distance >= maxReach - 0.001f)
         {
             Vector2 direction = distance > 0.0001f ? span / distance : Vector2.down;
@@ -355,7 +414,6 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
             return;
         }
 
-        float slack = maxReach - distance;
         float crossing = 1f - Mathf.Abs(poleSide);
         Vector2 bulge = new Vector2(
             poleSide * slack * (0.6f + bendHint * 0.4f),
@@ -372,6 +430,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
                 * Mathf.Sin(ripplePhase - i * 0.65f);
             guideNodes[i] = Vector2.Lerp(pivot, goal, t)
                 + Mathf.Sin(Mathf.PI * t) * bulge
+                + Mathf.Sin(Mathf.PI * t) * planarGravity.normalized * gravitySag
                 + new Vector2(wave, 0f);
             nodes[i] = Vector2.Lerp(nodes[i], guideNodes[i], blend);
         }
@@ -425,7 +484,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         GUI.Label(new Rect(panel.x + 12, panel.y + 24, 225, 20),
             "Drag the + at the lower middle");
         GUI.Label(new Rect(panel.x + 12, panel.y + 44, 225, 20),
-            "Pivot: Bone3 | top bends slightly");
+            "Pivot: Bone4 | graded upper bend");
 #if UNITY_EDITOR
         GUI.Label(new Rect(panel.x + 12, panel.y + 64, 225, 20),
             autoSweep ? $"F6 sweep: error {autoSweepMaxError:F3}, turn {autoSweepMaxTurn:F1}"

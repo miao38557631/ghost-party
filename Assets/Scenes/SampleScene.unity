@@ -598,13 +598,16 @@ MonoBehaviour:
   solverIterations: 64
   bendHint: 0.65
   elbowDownBias: 2
-  sideSwitchWidth: 0.3
+  sideSwitchWidth: 0.366
   releaseSpring: 7
   releaseDamping: 0.36
+  gravityAcceleration: 20
   rippleStrength: 0.28
   rippleFrequency: 3.5
   rippleDecay: 2
-  upperBendDegrees: 8
+  bone1BendDegrees: 0.5
+  bone2BendDegrees: 6.3
+  bone3BendDegrees: 26.9
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
