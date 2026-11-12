@@ -2,81 +2,72 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.Serialization;
 
-/// <summary>Reveals the floating ghost through a whole-mesh wall.
-/// Hides a vertical wall section with a small feathered edge when it blocks the ghost.</summary>
+/// <summary>Low foreground walls, selected by real wall planes rather than a moving hole in the image.</summary>
 [DisallowMultipleComponent]
 [AddComponentMenu("Ghost Party/Ghost Wall Cutout")]
-[DefaultExecutionOrder(110)]
+[DefaultExecutionOrder(250)]
 public sealed class GhostWallCutout : MonoBehaviour
 {
-    [Tooltip("Wall hidden on each side of the player, measured as a fraction of screen height.")]
-    [FormerlySerializedAs("screenRadius")]
-    [SerializeField, Min(0.01f)] float screenHalfWidth = 0.30f;
-    [Tooltip("Small soft edge, measured as a fraction of screen height.")]
-    [SerializeField, Min(0f)] float edgeFeather = 0.025f;
-    [Tooltip("Optional player transform. Empty: uses the scene's InvisibleGhost.")]
+    [Tooltip("Height left above each wall mesh's base. Rear walls always keep their full height.")]
+    [SerializeField, Min(0f)] float remainingHeight = 0.22f;
+    [Tooltip("Distance across a wall before changing sides, to prevent flicker while touching it.")]
+    [SerializeField, Min(0.01f)] float sideHysteresis = 0.2f;
+    [Tooltip("Seconds to lower an obstructing wall. A whole wall section moves together.")]
+    [SerializeField, Min(0f)] float lowerDuration = 0.18f;
+    [SerializeField, Min(0f)] float restoreDuration = 0.3f;
+    [Tooltip("Clearance around the visible ghost silhouette before lowering a wall.")]
+    [SerializeField, Min(0f)] float silhouettePadding = 0.15f;
     [SerializeField] Transform player;
-    [Tooltip("Optional camera. Empty: uses Camera.main.")]
     [SerializeField] Camera view;
 
-    static readonly int CenterId = Shader.PropertyToID("_GhostCutPos");
-    static readonly int HalfWidthId = Shader.PropertyToID("_GhostCutHalfWidth");
-    static readonly int FeatherId = Shader.PropertyToID("_GhostCutFeather");
-    static readonly int PlayerId = Shader.PropertyToID("_GhostCutPlayer");
-    static readonly int GroundForwardId = Shader.PropertyToID("_GhostCutGroundForward");
-    static readonly string[] WallNameHints = { "墙", "wall" };
     const string DecorationShaderName = "GhostParty/DecorationTransparent";
+    static readonly string[] WallNameHints = { "墙", "wall" };
+    static readonly int EnabledId = Shader.PropertyToID("_GhostCutawayEnabled");
+    static readonly int TopId = Shader.PropertyToID("_GhostWallTop");
 
-    Renderer[] renderers;
+    sealed class Wall
+    {
+        public MeshRenderer renderer;
+        public MeshFilter filter;
+        public Mesh originalMesh;
+        public Mesh runtimeMesh;
+        public Material[] originalMaterials;
+        public readonly List<WallCutawaySections.Section> sections = new List<WallCutawaySections.Section>();
+        public bool initialized;
+    }
+    readonly List<Wall> walls = new List<Wall>();
+    readonly List<Material> ownedMaterials = new List<Material>();
     readonly List<Collider> wallColliders = new List<Collider>();
     readonly List<MeshCollider> ownedColliders = new List<MeshCollider>();
     MaterialPropertyBlock block;
-    readonly List<Material> ownedMaterials = new List<Material>();
     bool collected;
-    bool warned;
+    Renderer playerArtwork;
 
-    public float ScreenHalfWidth { get { return screenHalfWidth; } }
-    public int RendererCount { get { if (!collected) Collect(); return renderers == null ? 0 : renderers.Length; } }
+    public float RemainingHeight { get { return remainingHeight; } }
+    public int RendererCount { get { return walls.Count; } }
+    public int SectionCount
+    {
+        get { int count = 0; foreach (Wall wall in walls) count += wall.sections.Count; return count; }
+    }
+    public int LoweredSectionCount
+    {
+        get { int count = 0; foreach (Wall wall in walls) foreach (var section in wall.sections) if (section.lowered) count++; return count; }
+    }
 
     public void Initialize(Transform targetPlayer)
     {
         player = targetPlayer;
+        playerArtwork = null;
+        if (Application.isPlaying && !collected) Collect();
         IgnorePlayerCollision();
     }
 
-    void Awake()
-    {
-        Collect();
-    }
-
-    void OnDisable()
-    {
-        if (renderers == null) return;
-        if (block == null) block = new MaterialPropertyBlock();
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            if (renderers[i] == null) continue;
-            renderers[i].GetPropertyBlock(block);
-            block.SetFloat(HalfWidthId, 0f);
-            renderers[i].SetPropertyBlock(block);
-        }
-    }
-
-    void OnDestroy()
-    {
-        for (int i = 0; i < ownedColliders.Count; i++)
-            if (ownedColliders[i] != null) Destroy(ownedColliders[i]);
-        for (int i = 0; i < ownedMaterials.Count; i++)
-            if (ownedMaterials[i] != null) Destroy(ownedMaterials[i]);
-        ownedMaterials.Clear();
-    }
+    void Awake() { if (Application.isPlaying) Collect(); }
 
     void LateUpdate()
     {
         if (!collected) Collect();
-        if (renderers == null || renderers.Length == 0) return;
         if (player == null)
         {
             GameObject found = GameObject.Find("InvisibleGhost");
@@ -86,50 +77,99 @@ public sealed class GhostWallCutout : MonoBehaviour
         }
         if (view == null) view = Camera.main;
         if (view == null) return;
-
-        // Screen X makes the opening symmetric in the player's current view. Ground-plane depth ignores
-        // wall height, so a tall wall behind the ghost cannot be mistaken for a foreground wall.
-        Vector3 viewport = view.WorldToViewportPoint(player.position);
-        Vector3 groundForward = Vector3.ProjectOnPlane(view.transform.forward, Vector3.up).normalized;
-        bool occluded = viewport.z > 0f && WallBlocksPlayer();
+        if (playerArtwork == null)
+        {
+            GhostPlayerVisual visual = player.GetComponentInChildren<GhostPlayerVisual>(true);
+            if (visual != null) playerArtwork = visual.GetComponentInChildren<MeshRenderer>(true);
+        }
         if (block == null) block = new MaterialPropertyBlock();
-        for (int i = 0; i < renderers.Length; i++)
+        foreach (Wall wall in walls)
         {
-            if (renderers[i] == null) continue;
-            renderers[i].GetPropertyBlock(block);
-            block.SetVector(CenterId, new Vector4(viewport.x, viewport.y, 0f, 0f));
-            block.SetVector(PlayerId, player.position);
-            block.SetVector(GroundForwardId, groundForward);
-            block.SetFloat(HalfWidthId, occluded ? screenHalfWidth : 0f);
-            block.SetFloat(FeatherId, edgeFeather);
-            renderers[i].SetPropertyBlock(block);
+            if (wall.renderer == null) continue;
+            Transform owner = wall.renderer.transform;
+            Matrix4x4 normalMatrix = owner.localToWorldMatrix.inverse.transpose;
+            float low = wall.renderer.bounds.min.y + remainingHeight;
+            float high = wall.renderer.bounds.max.y + 0.02f;
+            for (int i = 0; i < wall.sections.Count; i++)
+            {
+                var section = wall.sections[i];
+                Vector3 normal = normalMatrix.MultiplyVector(section.localNormal).normalized;
+                Vector3 point = owner.TransformPoint(section.localPoint);
+                // Orthographic rays are parallel: using camera position would incorrectly classify
+                // walls at the edge of a wide screen. Height/tilt does not enter this floor-plane test.
+                Vector3 direction = view.orthographic ? view.transform.forward : point - view.transform.position;
+                direction = Vector3.ProjectOnPlane(direction, Vector3.up).normalized;
+                float facing = Vector3.Dot(normal, direction);
+                float side = Vector3.Dot(normal, player.position - point) * Mathf.Sign(facing);
+                if (playerArtwork != null && playerArtwork.enabled && playerArtwork.gameObject.activeInHierarchy)
+                {
+                    Bounds bounds = playerArtwork.bounds;
+                    float radius = Vector3.Dot(new Vector3(Mathf.Abs(normal.x), Mathf.Abs(normal.y), Mathf.Abs(normal.z)), bounds.extents);
+                    side = Mathf.Max(side, Vector3.Dot(normal, bounds.center - point) * Mathf.Sign(facing) + radius);
+                }
+                bool vertical = Mathf.Abs(normal.y) < 0.1f;
+                if (!wall.initialized)
+                    section.lowered = vertical && Mathf.Abs(facing) > 0.08f && side > -silhouettePadding;
+                else if (!vertical || Mathf.Abs(facing) < 0.04f || side < -silhouettePadding - sideHysteresis)
+                    section.lowered = false;
+                else if (Mathf.Abs(facing) > 0.08f && side > -silhouettePadding)
+                    section.lowered = true;
+                float target = section.lowered ? low : high;
+                float duration = section.lowered ? lowerDuration : restoreDuration;
+                section.visibleTop = !wall.initialized || duration <= 0f ? target :
+                    Mathf.MoveTowards(section.visibleTop, target, (high - low) * Time.unscaledDeltaTime / duration);
+                wall.renderer.GetPropertyBlock(block, i);
+                block.SetFloat(EnabledId, 1f);
+                block.SetFloat(TopId, section.visibleTop);
+                wall.renderer.SetPropertyBlock(block, i);
+            }
+            wall.initialized = true;
         }
     }
 
-    bool WallBlocksPlayer()
+    void Collect()
     {
-        return WallBlocksPoint(player.position + Vector3.up * 0.25f) ||
-               WallBlocksPoint(player.position + Vector3.up * 0.65f);
-    }
-
-    bool WallBlocksPoint(Vector3 target)
-    {
-        Vector3 viewport = view.WorldToViewportPoint(target);
-        if (viewport.z <= 0f) return false;
-        // ViewportPointToRay starts at the correct pixel for an orthographic camera.
-        Ray forwardRay = view.ViewportPointToRay(viewport);
-        float distance = Vector3.Dot(target - forwardRay.origin, forwardRay.direction);
-        if (distance <= 0.05f) return false;
-        Ray reverseRay = new Ray(target, -forwardRay.direction);
-        for (int i = 0; i < wallColliders.Count; i++)
+        if (collected) return;
+        collected = true;
+        Shader shader = Shader.Find(DecorationShaderName);
+        foreach (MeshRenderer renderer in GetComponentsInChildren<MeshRenderer>(true))
         {
-            Collider wall = wallColliders[i];
-            if (wall == null || !wall.enabled) continue;
-            RaycastHit hit;
-            if (wall.Raycast(forwardRay, out hit, distance - 0.05f) ||
-                wall.Raycast(reverseRay, out hit, distance - 0.05f)) return true;
+            if (renderer.GetComponentInParent<GhostFloorSurface>() != null) continue;
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null || shader == null) continue;
+            var wall = new Wall { renderer = renderer, filter = filter, originalMesh = filter.sharedMesh,
+                originalMaterials = renderer.sharedMaterials };
+            wall.runtimeMesh = WallCutawaySections.Create(wall.originalMesh, renderer.transform, wall.sections);
+            if (wall.runtimeMesh == null)
+            {
+                Debug.LogWarning("GhostWallCutout: enable Read/Write on the wall model: " + renderer.name +
+                    ". Leaving the original wall intact.", renderer);
+                continue;
+            }
+            Material[] materials = new Material[wall.sections.Count];
+            Material[] supported = (Material[])wall.originalMaterials.Clone();
+            for (int m = 0; m < supported.Length; m++)
+            {
+                if (supported[m] == null || supported[m].HasProperty(TopId)) continue;
+                supported[m] = new Material(supported[m]) { shader = shader };
+                ownedMaterials.Add(supported[m]);
+            }
+            for (int i = 0; i < materials.Length; i++)
+                materials[i] = supported.Length == 0 ? null : supported[Mathf.Min(wall.sections[i].materialIndex, supported.Length - 1)];
+            filter.sharedMesh = wall.runtimeMesh;
+            renderer.sharedMaterials = materials;
+            walls.Add(wall);
+            Collider collider = renderer.GetComponent<Collider>();
+            if (collider == null)
+            {
+                MeshCollider created = renderer.gameObject.AddComponent<MeshCollider>();
+                created.sharedMesh = wall.originalMesh;
+                ownedColliders.Add(created);
+                collider = created;
+            }
+            wallColliders.Add(collider);
         }
-        return false;
+        IgnorePlayerCollision();
     }
 
     void IgnorePlayerCollision()
@@ -137,70 +177,40 @@ public sealed class GhostWallCutout : MonoBehaviour
         if (player == null) return;
         CharacterController controller = player.GetComponent<CharacterController>();
         if (controller == null) return;
-        for (int i = 0; i < wallColliders.Count; i++)
-            if (wallColliders[i] != null) Physics.IgnoreCollision(controller, wallColliders[i], true);
+        foreach (Collider wall in wallColliders) if (wall != null) Physics.IgnoreCollision(controller, wall, true);
     }
 
-    void Collect()
+    void OnDisable()
     {
-        collected = true;
-        Renderer[] found = GetComponentsInChildren<Renderer>(true);
-        var kept = new List<Renderer>(found.Length);
-        for (int i = 0; i < found.Length; i++)
+        if (block == null) block = new MaterialPropertyBlock();
+        foreach (Wall wall in walls)
         {
-            if (found[i] == null) continue;
-            // Never cut the floor, even if the wall object happens to contain it.
-            if (found[i].GetComponentInParent<GhostFloorSurface>() != null) continue;
-            kept.Add(found[i]);
-            Collider collider = found[i].GetComponent<Collider>();
-            if (collider == null)
+            wall.initialized = false;
+            if (wall.renderer == null) continue;
+            for (int i = 0; i < wall.sections.Count; i++)
             {
-                MeshFilter filter = found[i].GetComponent<MeshFilter>();
-                if (filter != null && filter.sharedMesh != null)
-                {
-                    MeshCollider queryCollider = found[i].gameObject.AddComponent<MeshCollider>();
-                    queryCollider.sharedMesh = filter.sharedMesh;
-                    collider = queryCollider;
-                    ownedColliders.Add(queryCollider);
-                }
+                wall.renderer.GetPropertyBlock(block, i);
+                block.SetFloat(EnabledId, 0f);
+                wall.renderer.SetPropertyBlock(block, i);
             }
-            if (collider != null) wallColliders.Add(collider);
-        }
-        IgnorePlayerCollision();
-        renderers = kept.ToArray();
-        if (renderers.Length == 0) return;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            Renderer renderer = renderers[i];
-            Material[] materials = renderer.sharedMaterials;
-            bool changed = false;
-            for (int m = 0; m < materials.Length; m++)
-            {
-                Material material = materials[m];
-                if (material == null || material.HasProperty(HalfWidthId)) continue;
-                // The wall may still sit on Standard. Swap in a runtime copy of the decoration shader so the
-                // cutout works without touching the imported asset; texture and tint names survive the swap.
-                Shader cutout = Shader.Find(DecorationShaderName);
-                if (cutout == null) { WarnOnce(material); continue; }
-                Material upgraded = new Material(material);
-                upgraded.name = material.name + " (wall cutout)";
-                upgraded.shader = cutout;
-                materials[m] = upgraded;
-                ownedMaterials.Add(upgraded);
-                changed = true;
-                Debug.Log("GhostWallCutout: '" + material.shader.name + "' has no cutout support; " + renderer.name +
-                          " slot " + m + " now uses " + DecorationShaderName + " at runtime.", this);
-            }
-            if (changed) renderer.sharedMaterials = materials;
         }
     }
 
-    void WarnOnce(Material material)
+    void OnDestroy()
     {
-        if (warned) return;
-        warned = true;
-        Debug.LogWarning("GhostWallCutout: wall material '" + material.name + "' uses shader '" + material.shader.name +
-                         "' and " + DecorationShaderName + " was not found. Assign a material using that shader.", this);
+        if (block == null) block = new MaterialPropertyBlock();
+        foreach (Wall wall in walls)
+        {
+            if (wall.renderer != null)
+            {
+                for (int i = 0; i < wall.sections.Count; i++) wall.renderer.SetPropertyBlock(null, i);
+                wall.renderer.sharedMaterials = wall.originalMaterials;
+            }
+            if (wall.filter != null) wall.filter.sharedMesh = wall.originalMesh;
+            if (wall.runtimeMesh != null) Destroy(wall.runtimeMesh);
+        }
+        foreach (Material material in ownedMaterials) if (material != null) Destroy(material);
+        foreach (MeshCollider collider in ownedColliders) if (collider != null) Destroy(collider);
     }
 
     /// <summary>Wall object for a scene: an existing cutout component, then a root whose name says wall.</summary>

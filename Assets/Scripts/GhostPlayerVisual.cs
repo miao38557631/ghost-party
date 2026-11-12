@@ -214,6 +214,7 @@ public sealed class GhostPlayerVisual : MonoBehaviour
     void Align(Camera view)
     {
         // Rotate only Visual; physics, movement axes and interaction references stay on InvisibleGhost.
-        if (faceCamera && view != null) transform.rotation = view.transform.rotation;
+        if (faceCamera && view != null)
+            GroundPlaneBillboard.Align(transform, view, Mathf.Abs(transform.localScale.x));
     }
 }

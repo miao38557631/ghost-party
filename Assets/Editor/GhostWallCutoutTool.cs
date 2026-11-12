@@ -4,7 +4,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-/// <summary>Authoring helpers for the hard wall opening that reveals the ghost.</summary>
+/// <summary>Authoring helpers for per-section foreground wall cutaways.</summary>
 public static class GhostWallCutoutTool
 {
     [MenuItem("Ghost Party/Level/Attach Wall Cutout To Selection")]
@@ -40,7 +40,7 @@ public static class GhostWallCutoutTool
             text.AppendLine("WALL ROOT: " + wall.name + Describe(wall.gameObject));
             GhostWallCutout cutout = wall.GetComponent<GhostWallCutout>();
             text.AppendLine("  component: " + (cutout != null
-                ? "present, screen half-width " + cutout.ScreenHalfWidth.ToString("0.00") + " of screen height"
+                ? "present, remaining wall height " + cutout.RemainingHeight.ToString("0.00") + " world units"
                 : "missing (Play adds it automatically)"));
             Renderer[] renderers = wall.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < renderers.Length && i < 12; i++)
@@ -58,7 +58,7 @@ public static class GhostWallCutoutTool
         Renderer[] renderers = target.GetComponentsInChildren<Renderer>(true);
         int supported = 0;
         for (int i = 0; i < renderers.Length; i++)
-            if (renderers[i].sharedMaterial != null && renderers[i].sharedMaterial.HasProperty("_GhostCutHalfWidth")) supported++;
+            if (renderers[i].sharedMaterial != null && renderers[i].sharedMaterial.HasProperty("_GhostCutawayEnabled")) supported++;
         return "  renderers=" + renderers.Length + "  cutout-capable materials=" + supported +
                (renderers.Length > 0 && supported == 0 ? "  -> assign a material using GhostParty/DecorationTransparent" : "");
     }

@@ -148,6 +148,6 @@ public sealed class PrankNpcActor : MonoBehaviour
     {
         if (artwork == null || viewCamera == null) return;
         // Preserve the NPC's screen-space slap tilt while following map yaw.
-        artwork.rotation = viewCamera.transform.rotation * Quaternion.Euler(0f, 0f, transform.eulerAngles.z);
+        GroundPlaneBillboard.Align(artwork, viewCamera, Mathf.Abs(artworkScaleX), transform.eulerAngles.z);
     }
 }

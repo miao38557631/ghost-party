@@ -93,7 +93,7 @@ namespace GhostParty.LevelWhitebox
             if (rig == null) rig = followCamera.gameObject.AddComponent<PrankCameraRig>();
             rig.Initialize(player, cameraSettings, floorLeftX, floorRightX);
             // Separate whitebox wall pieces still fade piece by piece. The imported wall mesh uses a
-            // hard opening centered on the ghost when it stands behind a foreground wall.
+            // planar wall sections, lowering only those in front of the ghost.
             var wallGroup = GameObject.Find("02_BlackPlanLines_Walls_2m_80mm");
             if (wallGroup != null)
                 followCamera.gameObject.AddComponent<WhiteboxWallOcclusion>()
