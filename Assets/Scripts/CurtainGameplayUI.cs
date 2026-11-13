@@ -3,6 +3,7 @@ using UnityEngine.UI;
 
 /// <summary>Gameplay moves anchors, leaving the authored Canvas transforms and graphic styles editable.</summary>
 [DisallowMultipleComponent]
+[DefaultExecutionOrder(1000)]
 public sealed class CurtainGameplayUI : MonoBehaviour
 {
     // The gameplay passes a snapshot from its existing audio clock and input
@@ -11,10 +12,14 @@ public sealed class CurtainGameplayUI : MonoBehaviour
 
     public struct PlayerCue
     {
+        public SpineCurtainDragIK curtainVisual;
         public CueKind kind;
         public string instruction, timing, icon, nextIcon, nextLabel;
         public float beatsToTarget, tolerance, motionProgress;
         public bool held, armed, recovering, motionReady;
+        public bool inputPressed, usingGamepad, english, hasNextDirection;
+        public string exitHint;
+        public Vector2 gestureOrigin, gestureTarget, nextGestureTarget;
     }
 
     [Header("Current action")]
@@ -42,132 +47,222 @@ public sealed class CurtainGameplayUI : MonoBehaviour
     [Header("Beat animation")]
     [SerializeField, Range(0f, 1f)] float beatPopStrength = 0.55f;
 
-    [Header("Player HUD (screen space)")]
-    [Tooltip("Offset from the curtain's viewport position. This is presentation only.")]
-    [SerializeField] Vector2 playerHudOffset = new Vector2(-0.13f, -0.16f);
-    [SerializeField, Range(0.65f, 1.35f)] float playerHudScale = 1f;
+    [Header("Designer artwork (transparent, Full Rect sprites)")]
+    [SerializeField] Sprite ghostWhite, ghostBlack, arrowWhite, arrowBlack;
+    [SerializeField] Sprite ringOuter, ringInner, mouseIdle, mousePressed;
+    [SerializeField] Sprite tapChinese, holdChinese, tapEnglish, holdEnglish;
+    [Header("Interaction layout (1920 x 1080 reference pixels)")]
+    [Tooltip("Viewport offset from the curtain object, before keeping the whole gesture on screen.")]
+    [SerializeField] Vector2 playerHudOffset = new Vector2(0f, 0f);
+    [SerializeField, Range(0.5f, 1.5f)] float playerHudScale = 1f;
     [SerializeField] Font playerHudFont;
-    [SerializeField] Color cuePaper = new Color(0.98f, 0.97f, 0.94f);
-    [SerializeField] Color cueInk = new Color(0.12f, 0.13f, 0.17f);
-    [SerializeField] Color timingColor = new Color(1f, 0.84f, 0.34f);
+    [SerializeField, Min(80f)] float ghostWidth = 170f;
+    [SerializeField, Min(60f)] float beatRingDiameter = 188f;
+    [SerializeField, Min(40f)] float targetDiameter = 118f;
+    [SerializeField, Min(100f)] float routeHalfSpan = 245f;
+    [SerializeField, Range(0.1f, 0.9f)] float previewStartProgress = 0.5f;
+    [SerializeField, Range(0f, 1f)] float completedArrowAlpha = 0.14f;
+    [SerializeField, Range(0f, 25f)] float ghostLeanDegrees = 10f;
+    [Header("Cloth-bound cue size")]
+    [SerializeField, Range(0.5f, 1f), Tooltip("贴住实体窗帘时幽灵和箭头的尺寸，给相邻抓取点留出空隙。")]
+    float clothGhostScale = 0.75f;
+    [SerializeField, Range(0.5f, 1f), Tooltip("贴住实体窗帘时目标圈的尺寸；位置始终对应实际可达抓取点。")]
+    float clothTargetScale = 0.90f;
 
-    RectTransform playerHud;
-    RectTransform actionVisual;
-    Image actionDisk, timingRing, motionTrack, motionFill;
-    Text playerIcon, playerInstruction, playerTiming, playerFeedback;
-    Image instructionBackplate;
-    RectTransform nextVisual;
-    Text playerNextIcon, playerNextLabel;
+    RectTransform playerHud, actionVisual, ghostBody, targetVisual, nextVisual;
+    Image ghostImage, actionLabel, mouseImage, timingRing, directionArrow;
+    Image currentTargetRing, currentTargetCore, nextTargetRing, nextTargetCore;
+    CanvasGroup nextGroup;
+    Text playerInstruction, playerTiming, playerFeedback, deviceLabel;
+    RectTransform instructionBackplate;
     float playerFeedbackUntil;
-    Sprite runtimeDisk, runtimeRing, runtimeSolid;
-    Texture2D runtimeDiskTexture, runtimeRingTexture;
+    PlayerCue lastPlayerCue;
+    Camera lastPlayerView;
+    Vector3 lastCurtainPosition;
+    bool lastPlayerVisible;
+
+    void LateUpdate()
+    {
+        // Run after camera composition and Spine pose evaluation. Camera shake
+        // must not separate the icon from the solved cloth grab point.
+        if (lastPlayerCue.curtainVisual != null)
+            PresentPlayerCue(lastPlayerVisible, lastPlayerCue, lastPlayerView, lastCurtainPosition);
+    }
+
+    public bool HasDesignerArtwork { get { return ghostWhite && ghostBlack && arrowWhite && arrowBlack
+        && ringOuter && ringInner && mouseIdle && mousePressed && tapChinese && holdChinese && tapEnglish && holdEnglish; } }
 
     public void AttachPlayerHud(Canvas host)
     {
         if (playerHud != null || host == null) return;
-        var root = new GameObject("CurtainPlayerHUD", typeof(RectTransform), typeof(CanvasGroup));
-        root.transform.SetParent(host.transform, false);
-        playerHud = root.GetComponent<RectTransform>();
-        playerHud.sizeDelta = new Vector2(460f, 240f);
-        var group = root.GetComponent<CanvasGroup>();
-        group.interactable = false;
-        group.blocksRaycasts = false;
-        runtimeDisk = MakeMarkerSprite(false, out runtimeDiskTexture);
-        runtimeRing = MakeMarkerSprite(true, out runtimeRingTexture);
-        runtimeSolid = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f));
+        if (!HasDesignerArtwork) { Debug.LogError("Curtain designer artwork is not bound on the UI prefab.", this); return; }
+        playerHud = PlayerRect("CurtainPlayerHUD", host.transform, Vector2.zero, new Vector2(800f, 700f));
+        var group = playerHud.gameObject.AddComponent<CanvasGroup>();
+        group.interactable = group.blocksRaycasts = false;
 
-        instructionBackplate = PlayerImage("InstructionBackplate", playerHud, new Vector2(0f, -55f),
-            new Vector2(450f, 86f), new Color(0.07f, 0.08f, 0.12f, 0.86f));
-        actionVisual = PlayerRect("CurrentAction", playerHud, new Vector2(0f, 37f), new Vector2(80f, 80f));
-        timingRing = PlayerImage("ApproachingBeat", actionVisual, Vector2.zero, new Vector2(94f, 94f), timingColor);
-        timingRing.sprite = runtimeRing;
-        actionDisk = PlayerImage("ActionDisk", actionVisual, Vector2.zero, new Vector2(80f, 80f), cuePaper);
-        actionDisk.sprite = runtimeDisk;
-        playerIcon = PlayerText("ActionIcon", actionVisual, Vector2.zero, new Vector2(72f, 64f), 36, cueInk);
-        motionTrack = PlayerImage("GestureProgressTrack", playerHud, new Vector2(0f, -16f),
-            new Vector2(136f, 5f), new Color(1f, 1f, 1f, 0.22f));
-        motionFill = PlayerImage("GestureProgress", motionTrack.rectTransform, Vector2.zero,
-            new Vector2(136f, 5f), timingColor);
-        motionFill.sprite = runtimeSolid;
-        motionFill.type = Image.Type.Filled;
-        motionFill.fillMethod = Image.FillMethod.Horizontal;
-        motionFill.fillOrigin = 0;
-
-        playerInstruction = PlayerText("Instruction", playerHud, new Vector2(0f, -39f), new Vector2(426f, 40f), 26, Color.white);
-        playerTiming = PlayerText("Timing", playerHud, new Vector2(0f, -74f), new Vector2(426f, 32f), 19,
-            new Color(0.90f, 0.92f, 0.97f));
-        playerFeedback = PlayerText("Feedback", playerHud, new Vector2(0f, 133f), new Vector2(430f, 38f), 24, Color.white);
-        nextVisual = PlayerRect("NextAction", playerHud, new Vector2(-91f, 15f), new Vector2(62f, 82f));
-        var nextGroup = nextVisual.gameObject.AddComponent<CanvasGroup>();
-        nextGroup.alpha = 0.7f;
-        var nextDisk = PlayerImage("Disk", nextVisual, Vector2.zero, new Vector2(42f, 42f), cuePaper);
-        nextDisk.sprite = runtimeDisk;
-        playerNextIcon = PlayerText("Icon", nextVisual, Vector2.zero, new Vector2(42f, 42f), 23, cueInk);
-        playerNextLabel = PlayerText("Label", nextVisual, new Vector2(0f, -35f), new Vector2(86f, 24f), 15, Color.white);
+        // Targets are below the moving ghost. They are guidance, never hit-test surfaces.
+        nextVisual = PlayerRect("NextDragTarget", playerHud, Vector2.zero, Vector2.one * targetDiameter);
+        nextGroup = nextVisual.gameObject.AddComponent<CanvasGroup>();
+        nextTargetRing = Artwork("Ring", nextVisual, ringOuter, Vector2.zero, Vector2.one * targetDiameter);
+        nextTargetCore = Artwork("Center", nextVisual, ringInner, Vector2.zero, Vector2.one * targetDiameter * 0.67f);
+        targetVisual = PlayerRect("CurrentDragTarget", playerHud, Vector2.zero, Vector2.one * targetDiameter);
+        currentTargetRing = Artwork("Ring", targetVisual, ringOuter, Vector2.zero, Vector2.one * targetDiameter);
+        currentTargetCore = Artwork("Center", targetVisual, ringInner, Vector2.zero, Vector2.one * targetDiameter * 0.67f);
+        directionArrow = Artwork("DirectionArrow", playerHud, arrowWhite, Vector2.zero, new Vector2(138f, 56f));
+        actionVisual = PlayerRect("CurrentAction", playerHud, Vector2.zero, new Vector2(ghostWidth, ghostWidth));
+        timingRing = Artwork("ApproachingBeat", actionVisual, ringOuter, Vector2.zero, Vector2.one * beatRingDiameter);
+        ghostBody = PlayerRect("GhostBody", actionVisual, Vector2.zero, new Vector2(ghostWidth, ghostWidth));
+        ghostImage = Artwork("Ghost", ghostBody, ghostBlack, Vector2.zero, new Vector2(ghostWidth, ghostWidth * 0.89f));
+        actionLabel = Artwork("ActionWord", actionVisual, tapChinese, new Vector2(15f, -40f), new Vector2(90f, 42f));
+        mouseImage = Artwork("MouseButton", actionVisual, mouseIdle, new Vector2(-47f, -40f), new Vector2(27f, 34f));
+        deviceLabel = PlayerText("GamepadButton", actionVisual, new Vector2(-4f, -40f), new Vector2(95f, 42f), 29);
+        instructionBackplate = PlayerRect("Caption", playerHud, Vector2.zero, new Vector2(410f, 64f));
+        var back = instructionBackplate.gameObject.AddComponent<Image>();
+        back.color = new Color(0.08f, 0.07f, 0.1f, 0.57f);
+        back.raycastTarget = false;
+        playerInstruction = PlayerText("Instruction", instructionBackplate, new Vector2(0f, 12f), new Vector2(394f, 28f), 20);
+        playerTiming = PlayerText("Timing", instructionBackplate, new Vector2(0f, -14f), new Vector2(394f, 24f), 16);
+        playerFeedback = PlayerText("JudgementFeedback", playerHud, Vector2.zero, new Vector2(310f, 36f), 24);
         playerHud.gameObject.SetActive(false);
     }
 
     public void PresentPlayerCue(bool visible, PlayerCue cue, Camera view, Vector3 curtainPosition)
     {
+        lastPlayerCue = cue;
+        lastPlayerView = view;
+        lastCurtainPosition = curtainPosition;
+        lastPlayerVisible = visible;
         if (playerHud == null) return;
-        if (playerHud.gameObject.activeSelf != visible) playerHud.gameObject.SetActive(visible);
-        if (!visible) return;
+        bool worldGrab = cue.curtainVisual != null && cue.curtainVisual.IsReady && view != null;
+        if (worldGrab) curtainPosition = cue.curtainVisual.GrabWorldPosition;
+        actionVisual.localScale = Vector3.one * (worldGrab ? clothGhostScale : 1f);
+        directionArrow.rectTransform.localScale = actionVisual.localScale;
+        targetVisual.localScale = nextVisual.localScale = Vector3.one * (worldGrab ? clothTargetScale : 1f);
+        if (visible && view != null && view.WorldToViewportPoint(curtainPosition).z <= 0f) visible = false;
+        playerHud.gameObject.SetActive(visible);
+        if (!visible) { ClearPlayerFeedback(); return; }
 
-        var anchor = new Vector2(0.28f, 0.43f);
-        if (view != null)
+        bool manual = cue.kind == CueKind.Tap || cue.kind == CueKind.Direction || cue.kind == CueKind.Hold;
+        bool directional = cue.kind == CueKind.Direction;
+        bool dragging = directional && cue.held && !cue.recovering;
+        float progress = dragging ? Mathf.Clamp01(cue.motionProgress) : 0f;
+        float handoff = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(previewStartProgress, 1f, progress));
+        Vector2 origin = cue.gestureOrigin * routeHalfSpan;
+        Vector2 destination = cue.gestureTarget * routeHalfSpan;
+        Vector2 ghostPosition = Vector2.Lerp(origin, destination, progress);
+        // Coordinates are derived from the actual plan on every frame: retries,
+        // skipped frames and interrupted holds cannot advance the visual route.
+        actionVisual.anchoredPosition = manual ? ghostPosition : Vector2.zero;
+        targetVisual.anchoredPosition = destination;
+        nextVisual.anchoredPosition = cue.nextGestureTarget * routeHalfSpan;
+        targetVisual.gameObject.SetActive(dragging);
+        bool preview = dragging && cue.hasNextDirection && handoff > 0f;
+        nextVisual.gameObject.SetActive(preview);
+        nextGroup.alpha = handoff;
+
+        bool pressed = cue.inputPressed && !cue.recovering;
+        ghostImage.sprite = pressed || !manual ? ghostWhite : ghostBlack;
+        ghostImage.color = new Color(1f, 1f, 1f, cue.recovering ? 0.6f : 1f);
+        bool showWord = manual && !dragging;
+        actionLabel.gameObject.SetActive(showWord && !cue.usingGamepad);
+        mouseImage.gameObject.SetActive(showWord && !cue.usingGamepad);
+        deviceLabel.gameObject.SetActive(manual && cue.usingGamepad);
+        actionLabel.sprite = cue.kind == CueKind.Tap ? (cue.english ? tapEnglish : tapChinese)
+            : (cue.english ? holdEnglish : holdChinese);
+        actionLabel.rectTransform.sizeDelta = new Vector2(cue.kind == CueKind.Tap && !cue.english ? 42f : 90f, 42f);
+        mouseImage.sprite = pressed ? mousePressed : mouseIdle;
+        PutText(deviceLabel, cue.kind == CueKind.Tap ? "A" : "RT");
+        deviceLabel.rectTransform.anchoredPosition = new Vector2(-4f, dragging ? -87f : -40f);
+
+        Vector2 direction = (destination - origin).normalized;
+        directionArrow.gameObject.SetActive(dragging);
+        if (dragging)
         {
-            Vector3 projected = view.WorldToViewportPoint(curtainPosition);
-            if (projected.z > 0f) anchor = new Vector2(projected.x, projected.y) + playerHudOffset;
+            // Rotate the supplied left-pointing arrow, not the text or whole ghost.
+            directionArrow.rectTransform.localRotation = Quaternion.Euler(0f, 0f,
+                Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 180f);
+            // Keep the arrow outside the ghost silhouette while fading it.
+            // Compressing it into the remaining distance hides it behind the body.
+            directionArrow.rectTransform.anchoredPosition = ghostPosition + direction * (ghostWidth * 0.65f);
+            directionArrow.sprite = cue.armed ? arrowBlack : arrowWhite;
+            directionArrow.color = new Color(1f, 1f, 1f, Mathf.Lerp(1f, completedArrowAlpha, handoff));
         }
-        // Clamp using the actual scaled Canvas rectangle, including small windows.
+        // Preserve the artist's upright body, with a small directional lean only.
+        ghostBody.localRotation = Quaternion.Euler(0f, 0f, dragging ? -direction.x * ghostLeanDegrees * Mathf.Sin(progress * Mathf.PI) : 0f);
+        ghostBody.localScale = new Vector3(directional && direction.x > 0f ? -1f : 1f, 1f, 1f);
+        float phase = 1f - Mathf.Clamp01(cue.beatsToTarget);
+        bool inWindow = Mathf.Abs(cue.beatsToTarget) <= cue.tolerance;
+        timingRing.gameObject.SetActive(manual && !dragging);
+        timingRing.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.42f, 1f, phase);
+        timingRing.color = new Color(1f, 1f, 1f, cue.recovering ? 0.3f : inWindow ? 1f : 0.78f);
+        currentTargetRing.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.35f, 1f, phase);
+        currentTargetRing.color = new Color(1f, 1f, 1f, inWindow ? 1f : 0.8f);
+
+        // Keep one compact caption below the gesture, outside its target circles.
+        float lowestPoint = Mathf.Min(origin.y, destination.y);
+        if (cue.hasNextDirection) lowestPoint = Mathf.Min(lowestPoint, cue.nextGestureTarget.y * routeHalfSpan);
+        instructionBackplate.anchoredPosition = new Vector2(-100f, manual ? lowestPoint - 135f : -120f);
+        PutText(playerInstruction, manual ? cue.timing : cue.instruction);
+        PutText(playerTiming, manual ? cue.exitHint : cue.timing + "  ·  " + cue.exitHint);
+        playerFeedback.rectTransform.anchoredPosition = actionVisual.anchoredPosition + new Vector2(0f, ghostWidth * 0.65f);
+        playerFeedback.gameObject.SetActive(Time.unscaledTime < playerFeedbackUntil);
+
         var parent = playerHud.parent as RectTransform;
         float width = parent == null ? 1920f : Mathf.Max(1f, parent.rect.width);
         float height = parent == null ? 1080f : Mathf.Max(1f, parent.rect.height);
-        float scale = Mathf.Min(playerHudScale, Mathf.Min(width / 500f, height / 300f));
+        float halfWidth = Mathf.Max(routeHalfSpan + ghostWidth, 320f);
+        float halfHeight = routeHalfSpan + 140f;
+        float scale = Mathf.Min(playerHudScale, Mathf.Min(width / (2f * halfWidth + 24f), height / (2f * halfHeight + 24f)));
         playerHud.localScale = Vector3.one * scale;
-        float marginX = Mathf.Min(0.49f, 242f * scale / width);
-        float marginY = Mathf.Min(0.49f, 162f * scale / height);
-        anchor.x = Mathf.Clamp(anchor.x, marginX, 1f - marginX);
-        anchor.y = Mathf.Clamp(anchor.y, marginY, 1f - marginY);
+        Vector3 projected = view == null ? new Vector3(0.4f, 0.5f, 1f) : view.WorldToViewportPoint(curtainPosition);
+        Vector2 anchor = new Vector2(projected.x, projected.y) + playerHudOffset;
+        anchor.x = Mathf.Clamp(anchor.x, halfWidth * scale / width, 1f - halfWidth * scale / width);
+        anchor.y = Mathf.Clamp(anchor.y, halfHeight * scale / height, 1f - halfHeight * scale / height);
         playerHud.anchorMin = playerHud.anchorMax = anchor;
         playerHud.anchoredPosition = Vector2.zero;
+        if (worldGrab) FollowSolvedGrab(cue, view, scale, dragging);
+    }
 
-        bool manual = cue.kind == CueKind.Tap || cue.kind == CueKind.Direction || cue.kind == CueKind.Hold;
-        actionVisual.gameObject.SetActive(manual);
-        bool hasNext = manual && !string.IsNullOrEmpty(cue.nextIcon);
-        nextVisual.gameObject.SetActive(hasNext);
-        if (hasNext)
+    void FollowSolvedGrab(PlayerCue cue, Camera view, float scale, bool dragging)
+    {
+        // Never screen-clamp this anchor: that would detach the icon from cloth.
+        Vector3 grab = view.WorldToViewportPoint(cue.curtainVisual.GrabWorldPosition);
+        playerHud.anchorMin = playerHud.anchorMax = new Vector2(grab.x, grab.y);
+        actionVisual.anchoredPosition = Vector2.zero;
+        Vector2 origin = WorldOffset(cue.curtainVisual.GestureOriginWorld, view, grab, scale);
+        Vector2 destination = WorldOffset(cue.curtainVisual.GestureTargetWorld, view, grab, scale);
+        Vector2 next = WorldOffset(cue.curtainVisual.RouteWorldPosition(cue.nextGestureTarget, view), view, grab, scale);
+        targetVisual.anchoredPosition = destination;
+        nextVisual.anchoredPosition = next;
+        Vector2 direction = (destination - origin).normalized;
+        if (dragging)
         {
-            PutText(playerNextIcon, cue.nextIcon);
-            PutText(playerNextLabel, cue.nextLabel);
+            directionArrow.rectTransform.localRotation = Quaternion.Euler(0f, 0f,
+                Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 180f);
+            directionArrow.rectTransform.anchoredPosition = direction * ghostWidth * clothGhostScale * 0.65f;
         }
-        PutText(playerInstruction, cue.instruction);
-        PutText(playerTiming, cue.timing);
-        PutText(playerIcon, cue.icon);
-        playerInstruction.rectTransform.anchoredPosition = new Vector2(0f, manual ? -39f : 14f);
-        playerTiming.rectTransform.anchoredPosition = new Vector2(0f, manual ? -74f : -21f);
-        instructionBackplate.rectTransform.anchoredPosition = new Vector2(0f, manual ? -55f : -3f);
-        playerFeedback.gameObject.SetActive(Time.unscaledTime < playerFeedbackUntil);
+        playerFeedback.rectTransform.anchoredPosition = new Vector2(0f, ghostWidth * clothGhostScale * 0.65f);
+        var parent = playerHud.parent as RectTransform;
+        float height = parent == null ? 1080f : parent.rect.height;
+        float lowest = dragging ? Mathf.Min(0f, destination.y) : 0f;
+        float highest = dragging ? Mathf.Max(0f, destination.y) : 0f;
+        if (nextVisual.gameObject.activeSelf)
+        {
+            lowest = Mathf.Min(lowest, next.y);
+            highest = Mathf.Max(highest, next.y);
+        }
+        // Keep the caption clear of the downward target, not just the ghost.
+        float captionY = lowest - 125f;
+        if (grab.y * height + captionY * scale < 42f) captionY = highest + 125f;
+        instructionBackplate.anchoredPosition = new Vector2(-100f, captionY);
+    }
 
-        if (!manual)
-        {
-            motionTrack.gameObject.SetActive(false);
-            return;
-        }
-        float phase = 1f - Mathf.Clamp01(cue.beatsToTarget);
-        bool inWindow = Mathf.Abs(cue.beatsToTarget) <= cue.tolerance;
-        bool directionReady = cue.kind != CueKind.Direction || cue.armed || cue.motionReady;
-        bool lit = inWindow && directionReady && !cue.recovering;
-        actionDisk.color = cue.recovering ? new Color(0.70f, 0.72f, 0.77f)
-            : cue.armed ? new Color(0.77f, 0.94f, 0.81f)
-            : lit ? timingColor : cue.held ? new Color(0.86f, 0.89f, 0.94f) : cuePaper;
-        playerIcon.color = cueInk;
-        timingRing.color = cue.recovering ? new Color(1f, 1f, 1f, 0.25f)
-            : (lit ? timingColor : new Color(1f, 1f, 1f, 0.72f));
-        timingRing.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.65f, 1f, phase);
-        bool showMotion = cue.kind == CueKind.Direction && cue.held && !cue.recovering;
-        motionTrack.gameObject.SetActive(showMotion);
-        if (showMotion) motionFill.fillAmount = Mathf.Clamp01(cue.motionProgress);
+    Vector2 WorldOffset(Vector3 world, Camera view, Vector3 grab, float scale)
+    {
+        var parent = playerHud.parent as RectTransform;
+        Vector2 size = parent == null ? new Vector2(1920f, 1080f) : parent.rect.size;
+        Vector3 p = view.WorldToViewportPoint(world);
+        return new Vector2((p.x - grab.x) * size.x, (p.y - grab.y) * size.y) / Mathf.Max(0.01f, scale);
     }
 
     public void ShowPlayerFeedback(string message, Color color, float duration)
@@ -190,61 +285,43 @@ public sealed class CurtainGameplayUI : MonoBehaviour
         if (text != null && text.text != value) text.text = value;
     }
 
-    RectTransform PlayerRect(string name, Transform parent, Vector2 position, Vector2 size)
+    static RectTransform PlayerRect(string name, Transform parent, Vector2 position, Vector2 size)
     {
         var go = new GameObject(name, typeof(RectTransform));
         go.transform.SetParent(parent, false);
         var rect = go.GetComponent<RectTransform>();
-        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
-        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition = position;
         rect.sizeDelta = size;
         return rect;
     }
 
-    Image PlayerImage(string name, Transform parent, Vector2 position, Vector2 size, Color color)
+    static Image Artwork(string name, Transform parent, Sprite sprite, Vector2 position, Vector2 size)
     {
-        var rect = PlayerRect(name, parent, position, size);
-        var image = rect.gameObject.AddComponent<Image>();
-        image.color = color;
+        var image = PlayerRect(name, parent, position, size).gameObject.AddComponent<Image>();
+        image.sprite = sprite;
+        image.preserveAspect = true;
         image.raycastTarget = false;
         return image;
     }
 
-    Text PlayerText(string name, Transform parent, Vector2 position, Vector2 size, int fontSize, Color color)
+    Text PlayerText(string name, Transform parent, Vector2 position, Vector2 size, int fontSize)
     {
-        var rect = PlayerRect(name, parent, position, size);
-        var text = rect.gameObject.AddComponent<Text>();
+        var text = PlayerRect(name, parent, position, size).gameObject.AddComponent<Text>();
         text.font = playerHudFont != null ? playerHudFont : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         text.fontSize = fontSize;
         text.alignment = TextAnchor.MiddleCenter;
-        text.color = color;
+        text.color = Color.white;
         text.horizontalOverflow = HorizontalWrapMode.Wrap;
         text.verticalOverflow = VerticalWrapMode.Truncate;
         text.resizeTextForBestFit = true;
-        text.resizeTextMinSize = Mathf.Max(13, fontSize - 5);
+        text.resizeTextMinSize = Mathf.Max(13, fontSize - 3);
         text.resizeTextMaxSize = fontSize;
         text.raycastTarget = false;
+        var outline = text.gameObject.AddComponent<Outline>();
+        outline.effectColor = new Color(0.1f, 0.07f, 0.1f, 0.95f);
+        outline.effectDistance = new Vector2(1f, -1f);
         return text;
-    }
-
-    static Sprite MakeMarkerSprite(bool ring, out Texture2D texture)
-    {
-        const int size = 128;
-        texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        texture.name = ring ? "CurtainHUD_Ring" : "CurtainHUD_Disk";
-        var pixels = new Color[size * size];
-        float center = (size - 1) * 0.5f;
-        for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
-        {
-            float dx = x - center, dy = y - center;
-            float distance = Mathf.Sqrt(dx * dx + dy * dy);
-            float edge = ring ? 3f - Mathf.Abs(distance - (center - 4f)) : center - 1f - distance;
-            pixels[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(edge / 1.5f));
-        }
-        texture.SetPixels(pixels);
-        texture.Apply();
-        return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
 
     public Canvas CurrentCueCanvas { get { return currentCueCanvas; } }
@@ -299,10 +376,6 @@ public sealed class CurtainGameplayUI : MonoBehaviour
     void OnDestroy()
     {
         if (playerHud != null) Destroy(playerHud.gameObject);
-        if (runtimeDisk != null) Destroy(runtimeDisk);
-        if (runtimeRing != null) Destroy(runtimeRing);
-        if (runtimeSolid != null) Destroy(runtimeSolid);
-        if (runtimeDiskTexture != null) Destroy(runtimeDiskTexture);
-        if (runtimeRingTexture != null) Destroy(runtimeRingTexture);
+
     }
 }

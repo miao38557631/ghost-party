@@ -71,6 +71,8 @@ public static class GhostGamepadPlayChecks
     {
         if (EditorApplication.isPlayingOrWillChangePlaymode) throw new InvalidOperationException("Exit Play before input checks.");
         Directory.CreateDirectory("Logs/InputSystem");
+        SessionState.SetBool(Key + ".languageExisted", PlayerPrefs.HasKey("GhostParty.Language"));
+        SessionState.SetInt(Key + ".languageValue", PlayerPrefs.GetInt("GhostParty.Language", 0));
         report = new Report();
         Save();
         SessionState.SetBool(Key, true);
@@ -126,6 +128,10 @@ public static class GhostGamepadPlayChecks
         bool preserved = SceneManager.GetActiveScene().path == SessionState.GetString(Key + ".editorScene", "") &&
             SceneManager.GetActiveScene().isDirty == SessionState.GetBool(Key + ".dirty", false);
         (preserved ? report.passed : report.failed).Add("Editor scene and dirty state restored without saving");
+        if (SessionState.GetBool(Key + ".languageExisted", false))
+            PlayerPrefs.SetInt("GhostParty.Language", SessionState.GetInt(Key + ".languageValue", 0));
+        else PlayerPrefs.DeleteKey("GhostParty.Language");
+        PlayerPrefs.Save();
         report.complete = true; report.running = ""; Save(); SessionState.SetBool(Key, false);
         Debug.Log("GHOST_INPUT_CHECKS_COMPLETE: " + report.passed.Count + " passed, " + report.failed.Count + " failed; " + ReportPath);
     }
@@ -207,6 +213,11 @@ public static class GhostGamepadPlayChecks
     static int PulseCount { get { return PulseStarts().Count; } }
     static bool Stopped { get { return commands.Count > 0 && commands[commands.Count - 1].low == 0 && commands[commands.Count - 1].high == 0; } }
     static IEnumerator Frames(int count) { for (int i = 0; i < count; i++) yield return null; }
+    static IEnumerator WaitRealtime(double seconds)
+    {
+        double end = Time.realtimeSinceStartupAsDouble + seconds;
+        while (Time.realtimeSinceStartupAsDouble < end) yield return null;
+    }
     static IEnumerator WaitBeat(double value)
     {
         double end = Time.realtimeSinceStartupAsDouble + 4;
@@ -227,11 +238,12 @@ public static class GhostGamepadPlayChecks
         { if (Time.realtimeSinceStartupAsDouble > end) throw new TimeoutException("Step " + value + " (" + ActionAt(value) + ") did not complete"); yield return null; }
         Check(Step == value + 1, "Step " + value + " completed through the input/beat pipeline (actual=" + Step + ", stage=" + Stage + ")");
     }
-    static void Pad(Vector2 stick = default, float rt = 0, bool a = false, bool b = false, Gamepad device = null)
+    static void Pad(Vector2 stick = default, float rt = 0, bool a = false, bool b = false, Gamepad device = null, bool view = false)
     {
         var state = new GamepadState { leftStick = stick, rightTrigger = rt };
         if (a) state = state.WithButton(GamepadButton.South);
         if (b) state = state.WithButton(GamepadButton.East);
+        if (view) state = state.WithButton(GamepadButton.Select);
         InputSystem.QueueStateEvent(device ?? pad, state);
     }
     static void Keys(params UnityEngine.InputSystem.Key[] keys) { InputSystem.QueueStateEvent(keyboard, new KeyboardState(keys)); }
@@ -277,6 +289,11 @@ public static class GhostGamepadPlayChecks
         prank = (MonoBehaviour)Object.FindObjectOfType(Type.GetType("GhostPartyPrototype, Assembly-CSharp", true));
         player = GameObject.Find("InvisibleGhost").transform;
         Check(prank != null && input != null, "Runtime input adapter and existing curtain controller initialized");
+        if (Cloth != null)
+        {
+            Check(ClothProperty<bool>("IsReady") && ClothProperty<bool>("GameplayControlled"), "White cloth solver initialized with gameplay ownership");
+            Check(!prank.GetComponent<MeshRenderer>().enabled, "Old red placeholder is hidden without disabling the interaction object");
+        }
         previousBackground = InputSystem.settings.backgroundBehavior; backgroundSaved = true;
         InputSystem.settings.backgroundBehavior = InputSettings.BackgroundBehavior.IgnoreFocus;
         input.SendMessage("OnApplicationFocus", true);
@@ -315,7 +332,10 @@ public static class GhostGamepadPlayChecks
         Pad(); yield return Frames(2);
         Pad(new Vector2(0.08f, 0), device: other); other.MakeCurrent(); yield return Frames(2);
         Check(InputProperty<Gamepad>("ActiveGamepad") == pad, "Gamepad.current changed by another device does not steal ownership");
-        Check(Object.FindObjectsOfType<Text>().Any(t => t.text.Contains("A") && t.text.Contains("点")), "Player HUD presents A tap instructions");
+        Check(Object.FindObjectsOfType<Text>().Any(t => t.name == "GamepadButton" && t.text == "A"), "Designer HUD presents the acting gamepad's A glyph");
+        var designerHud = GameObject.Find("CurtainPlayerHUD");
+        Check(designerHud != null && designerHud.GetComponentsInChildren<Graphic>(true).All(g => !g.raycastTarget), "Designer HUD never intercepts gameplay or settings input");
+        Check(!designerHud.transform.Find("CurrentAction/MouseButton").gameObject.activeSelf, "Gamepad HUD hides the mouse glyph");
         yield return Round(true);
         Check(Stage == "Complete", "Gamepad completes taps, RT directions, sustained hold and final throw");
         var pulses = PulseStarts();
@@ -326,7 +346,7 @@ public static class GhostGamepadPlayChecks
         Check(pulses.Count(c => Mathf.Approximately(c.low, .48f) && Mathf.Approximately(c.high, .57f)) == 8, "Swipe starts the 3-5-4-3-2 impact pattern");
         Check(pulses.Count(c => Mathf.Approximately(c.low, .60f) && Mathf.Approximately(c.high, .70f)) == 1, "Hold completion uses its own pulse");
         Check(pulses.Count(c => Mathf.Approximately(c.low, .60f) && Mathf.Approximately(c.high, .54f)) == 1, "Final throw starts the stronger impact pattern");
-        yield return Frames(25); Check(Stopped, "Rumble stops after its unscaled deadline");
+        yield return WaitRealtime(.5); Check(Stopped, "Rumble stops after its unscaled deadline");
         if (pulses.Count > 0)
         {
             var finalWave = commands.Where(c => c.device == pad.deviceId && c.time >= pulses[pulses.Count - 1].time && c.low > 0).ToList();
@@ -394,6 +414,13 @@ public static class GhostGamepadPlayChecks
         Check(Stage == "Complete" && PulseCount == keyboardPulses, "Mouse/keyboard completes the same full sequence without vibrating an idle gamepad");
         Keys(UnityEngine.InputSystem.Key.Escape); yield return Frames(2); Keys(); yield return Frames(2);
         Check(Mode == "Explore", "Escape still returns to exploration");
+        if (Cloth != null)
+        {
+            Check(!ClothProperty<bool>("IsGrabbed"), "Leaving possession releases the cloth grip");
+            yield return WaitRealtime(1.8);
+            Check(Vector3.Distance(ClothProperty<Vector3>("GrabWorldPosition"), ClothProperty<Vector3>("RestGrabWorldPosition")) < .08f,
+                "Released cloth settles back to its hanging rest position");
+        }
         Check(Object.FindObjectsOfType<StandaloneInputModule>().Count(m => m.isActiveAndEnabled) == 1,
             "Exactly one existing keyboard/mouse UI input module remains active");
         NearCurtain(); Keys(UnityEngine.InputSystem.Key.E); yield return Frames(2); Keys(); yield return Frames(2);
@@ -404,6 +431,8 @@ public static class GhostGamepadPlayChecks
         Keys(UnityEngine.InputSystem.Key.F8); yield return Frames(2); Keys(); yield return Frames(2);
         Keys(UnityEngine.InputSystem.Key.Escape); yield return Frames(2); Keys(); yield return Frames(2);
         Check(Mode == "Explore" && !(bool)Get(prank, "developerHudVisible"), "Settings UI closes and Escape returns to exploration");
+
+        yield return LanguageChecks();
 
         // Cleanup tests issue intercepted virtual-device commands; no physical motors are used.
         Pulse(); Time.timeScale = 0; yield return Frames(2); Check(Stopped, "Time-scale pause immediately clears motors"); Time.timeScale = 1;
@@ -418,6 +447,90 @@ public static class GhostGamepadPlayChecks
         Pulse(); Call(input, "DeviceChanged", pad, InputDeviceChange.Disconnected); Check(Stopped, "Disconnect callback clears motors and ownership");
         Pulse(); InputSystem.RemoveDevice(pad); Check(Stopped, "Device removal clears motors");
         Check(!InputProperty<bool>("GripHeld"), "Disconnected controller cannot leave a latched RT grip");
+    }
+
+    static void SetLanguage(string name)
+    {
+        var service = Type.GetType("GhostLanguage, Assembly-CSharp", true);
+        service.GetMethod("Set").Invoke(null, new[] { Enum.Parse(prank.GetType().GetNestedType("Language"), name) });
+    }
+    static bool HasChinese(string text) => text.Any(c => c >= '\u3400' && c <= '\u9fff');
+    static void CheckEnglishPlayerUi(string action)
+    {
+        var root = GameObject.Find("CurtainPlayerHUD");
+        var labels = root.GetComponentsInChildren<Text>().Where(t => t.enabled && !string.IsNullOrEmpty(t.text)).ToArray();
+        Check(labels.Length > 0 && labels.All(t => !HasChinese(t.text)), action + " has no stale Chinese text in English mode");
+        Canvas.ForceUpdateCanvases();
+        Check(labels.All(t => t.preferredWidth <= t.rectTransform.rect.width + 1f), action + " English text fits the compact HUD width");
+    }
+    static IEnumerator LanguageChecks()
+    {
+        string original = Get(prank, "language").ToString();
+        var service = Type.GetType("GhostLanguage, Assembly-CSharp", true);
+        Check(Object.FindObjectsOfType<Button>().Count(b => b.name == "LanguageButton") == 1,
+            "Exactly one language button remains available outside the diagnostic HUD");
+        var overlayType = Type.GetType("GhostLanguageUI, Assembly-CSharp", true);
+        Check(Object.FindObjectsOfType(overlayType).Length == 1, "Scene initialization does not duplicate the language overlay");
+        foreach (var system in new[] { SystemLanguage.ChineseSimplified, SystemLanguage.ChineseTraditional, SystemLanguage.English, SystemLanguage.French })
+        {
+            var expected = system == SystemLanguage.ChineseSimplified || system == SystemLanguage.ChineseTraditional ? "Chinese" : "English";
+            Check(service.GetMethod("DefaultFor", Flags).Invoke(null, new object[] { system }).ToString() == expected,
+                "First-launch fallback for " + system + " is " + expected);
+        }
+        SetLanguage("English");
+        NearCurtain(); Keys(UnityEngine.InputSystem.Key.E); yield return Frames(2); Keys(); yield return Frames(2);
+        Set(prank, "curtainTargetBeat", Beat + 20.0);
+        CheckEnglishPlayerUi("Tap");
+        var hud = GameObject.Find("CurtainPlayerHUD").transform;
+        var view = Get(prank, "gameplayUI");
+        Check(hud.Find("CurrentAction/ActionWord").GetComponent<Image>().sprite == (Sprite)Get(view, "tapEnglish"),
+            "English mouse tap uses the supplied Click artwork");
+        int savedStep = Step;
+        Set(prank, "curtainStep", 15); Call(prank, "UpdatePlayerHud");
+        CheckEnglishPlayerUi("Hold");
+        Check(hud.Find("CurrentAction/ActionWord").GetComponent<Image>().sprite == (Sprite)Get(view, "holdEnglish"),
+            "English hold uses the supplied Hold artwork");
+        Set(prank, "curtainStep", 3); Call(prank, "UpdatePlayerHud"); CheckEnglishPlayerUi("Direction");
+        Set(prank, "curtainStep", 2); Call(prank, "UpdatePlayerHud"); CheckEnglishPlayerUi("Automatic approach");
+        Set(prank, "curtainStep", savedStep); Call(prank, "UpdatePlayerHud");
+        double target = Target;
+        Keys(UnityEngine.InputSystem.Key.L); yield return Frames(2); Keys(); yield return Frames(2);
+        Check(Get(prank, "language").ToString() == "Chinese" && Step == savedStep && Target == target,
+            "L immediately switches to Chinese without restarting the action or beat");
+        Check(hud.Find("CurrentAction/ActionWord").GetComponent<Image>().sprite == (Sprite)Get(view, "tapChinese"),
+            "Chinese tap artwork refreshes immediately");
+        Pad(view: true); yield return Frames(2); Pad(); yield return Frames(2);
+        Check(Get(prank, "language").ToString() == "English" && Step == savedStep && Target == target,
+            "Xbox View switches language once without triggering A, B or a rhythm action");
+        CheckEnglishPlayerUi("Gamepad tap");
+        Check(PlayerPrefs.GetInt("GhostParty.Language", -1) == 1, "English selection is saved to PlayerPrefs");
+        service.GetField("loaded", Flags).SetValue(null, false);
+        Check(service.GetProperty("Current").GetValue(null).ToString() == "English", "A fresh language-service initialization restores the saved selection");
+        Pad(b: true); yield return Frames(2); Pad(); yield return Frames(2);
+        Check(GameObject.Find("LanguageButton") != null && Mode == "Explore", "Language control stays visible after leaving possession");
+        if (SceneManager.GetActiveScene().name == "Level01_FirstFloor")
+        {
+            NearCurtain(); yield return Frames(2);
+            var bubble = Object.FindObjectsOfType<Image>().First(i => i.name == "PossessionPrompt");
+            SetLanguage("Chinese"); yield return Frames(2);
+            Check(bubble.transform.Find("ChineseCaption").gameObject.activeInHierarchy, "Chinese possession bubble shows the localized caption");
+            SetLanguage("English"); yield return Frames(2);
+            Check(!bubble.transform.Find("ChineseCaption").gameObject.activeSelf, "English possession bubble restores the supplied Possess artwork");
+        }
+        SetLanguage(original);
+    }
+
+    static object Cloth => prank.GetType().GetProperty("CurtainVisual").GetValue(prank);
+    static T ClothProperty<T>(string name) => (T)Cloth.GetType().GetProperty(name).GetValue(Cloth);
+    static void CheckClothAnchor(string label)
+    {
+        if (Cloth == null) return; // SampleScene keeps its original standalone preview.
+        var root = GameObject.Find("CurtainPlayerHUD");
+        var icon = root.transform.Find("CurrentAction");
+        Vector2 iconScreen = RectTransformUtility.WorldToScreenPoint(null, icon.position);
+        Vector2 grabScreen = Camera.main.WorldToScreenPoint(ClothProperty<Vector3>("GrabWorldPosition"));
+        Check(Vector2.Distance(iconScreen, grabScreen) < 2f,
+            label + " ghost stays on the solved cloth grab point (<2 px)");
     }
 
     static IEnumerator Round(bool controller)
@@ -452,6 +565,7 @@ public static class GhostGamepadPlayChecks
                 Pointer(new Vector2(Screen.width * .5f, Screen.height * .4f), true);
                 yield return Frames(2);
             }
+            Vector3 clothBefore = Cloth == null ? Vector3.zero : ClothProperty<Vector3>("GrabWorldPosition");
             yield return WaitBeat(Target - .20);
             if (controller) Pad(Direction(action), 1);
             else
@@ -461,6 +575,13 @@ public static class GhostGamepadPlayChecks
                 Pointer((Vector2)start + Vector2.Scale(direction, new Vector2(Screen.width * .12f, Screen.height * .12f)), true);
             }
             yield return WaitStep(step);
+            yield return Frames(2);
+            if (Cloth != null)
+            {
+                Check(Vector3.Distance(clothBefore, ClothProperty<Vector3>("GrabWorldPosition")) > .02f,
+                    (controller ? "Gamepad " : "Mouse ") + action + " moves the actual cloth hem");
+                CheckClothAnchor((controller ? "Gamepad " : "Mouse ") + action);
+            }
             if (controller && action.StartsWith("Swipe")) Check(InputProperty<bool>("GripHeld"), "RT stays held through alternating " + action);
         }
     }

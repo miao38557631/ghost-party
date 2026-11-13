@@ -63,6 +63,28 @@ MonoBehaviour:
   nextCueOffset: {x: -0.62, y: -0.55, z: 0}
   escapeOffset: {x: 0.45, y: 1.3, z: 0}
   beatPopStrength: 0.55
+  ghostWhite: {fileID: 21300000, guid: 8fb4d2d35aaa1ad4198447e1c742c7ab, type: 3}
+  ghostBlack: {fileID: 21300000, guid: 48d09c36a9728e845992d56accf8e8df, type: 3}
+  arrowWhite: {fileID: 21300000, guid: 33c1ccc5b4ac66f4998f984846379457, type: 3}
+  arrowBlack: {fileID: 21300000, guid: 510c5e85485d790448eeca57e62a1b30, type: 3}
+  ringOuter: {fileID: 21300000, guid: 75ed11990ee8b784ab03a91043a74272, type: 3}
+  ringInner: {fileID: 21300000, guid: 51bf861e44ac9e143a996b791df76069, type: 3}
+  mouseIdle: {fileID: 21300000, guid: 6504ef3d55fc43b4aacacba3c03a3e81, type: 3}
+  mousePressed: {fileID: 21300000, guid: 4573ec2144911944995aefe21b18e6cb, type: 3}
+  tapChinese: {fileID: 21300000, guid: 6a524bba84cb231478c87d0e74263a57, type: 3}
+  holdChinese: {fileID: 21300000, guid: 1e25aa2e000c86a4eb96966ff62c172c, type: 3}
+  tapEnglish: {fileID: 21300000, guid: 8f6b16d4a77fade41a6978ccc7be81fc, type: 3}
+  holdEnglish: {fileID: 21300000, guid: a9003c323867a4f40afda456ef870553, type: 3}
+  playerHudOffset: {x: 0, y: 0}
+  playerHudScale: 1
+  playerHudFont: {fileID: 0}
+  ghostWidth: 170
+  beatRingDiameter: 188
+  targetDiameter: 118
+  routeHalfSpan: 245
+  previewStartProgress: 0.5
+  completedArrowAlpha: 0.14
+  ghostLeanDegrees: 10
 --- !u!1 &100003
 GameObject:
   m_ObjectHideFlags: 0

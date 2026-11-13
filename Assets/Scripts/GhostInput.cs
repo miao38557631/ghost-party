@@ -137,6 +137,15 @@ public sealed class GhostInput : MonoBehaviour
         }
     }
 
+    public static bool LanguagePressed
+    {
+        get
+        {
+            var s = Read();
+            return !Suspended && (KeyDown(KeyCode.L) || (s.usingGamepad && s.activePad != null && s.activePad.selectButton.wasPressedThisFrame));
+        }
+    }
+
     public static void BeginPossession()
     {
         var s = Read();
@@ -181,7 +190,7 @@ public sealed class GhostInput : MonoBehaviour
             bool newGrip = pad.rightTrigger.ReadValue() >= (state.grip ? settings.triggerReleaseThreshold : settings.triggerPressThreshold);
             bool intentionalStick = stick.magnitude >= Mathf.Max(settings.deviceSwitchThreshold, settings.movementDeadzone) &&
                 (stick - state.activityStick).sqrMagnitude >= 0.04f;
-            bool activity = pad.buttonSouth.wasPressedThisFrame || pad.buttonEast.wasPressedThisFrame ||
+            bool activity = pad.buttonSouth.wasPressedThisFrame || pad.buttonEast.wasPressedThisFrame || pad.selectButton.wasPressedThisFrame ||
                 (newGrip && !state.grip) || intentionalStick;
             if (activity && pad.lastUpdateTime >= candidateTime) { candidate = pad; candidateTime = pad.lastUpdateTime; }
             if (intentionalStick || stick.magnitude < settings.movementDeadzone) state.activityStick = stick;

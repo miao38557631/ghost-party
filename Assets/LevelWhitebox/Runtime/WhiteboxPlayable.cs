@@ -174,9 +174,10 @@ namespace GhostParty.LevelWhitebox
             if (curtainPrank != null && curtainPrank.IsActive) return;
             bool gamepad = GhostInput.UsingGamepad;
             string action = gamepad ? "A" : "E";
-            string prompt = (secondFloor ? "2F" : "1F") + (gamepad ? "  |  Left stick: move" : "  |  WASD: move");
+            string prompt = (secondFloor ? GhostLanguage.Text("二楼", "2F") : GhostLanguage.Text("一楼", "1F"))
+                + (gamepad ? GhostLanguage.Text("  |  左摇杆移动", "  |  Left stick: move") : GhostLanguage.Text("  |  WASD 移动", "  |  WASD: move"));
             if (CurrentInteractionTarget == stair && stair != null)
-                prompt += "  |  " + action + (secondFloor ? ": go downstairs" : ": go upstairs");
+                prompt += "  |  " + action + (secondFloor ? GhostLanguage.Text("：下楼", ": go downstairs") : GhostLanguage.Text("：上楼", ": go upstairs"));
             var style = new GUIStyle(GUI.skin.box)
             {
                 fontSize = 16,

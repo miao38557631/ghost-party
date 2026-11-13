@@ -66,6 +66,11 @@ namespace UnityMcp2019
         /// <summary>Initializes scene tracking and the bridge once per Editor domain.</summary>
         private static void Initialize()
         {
+#if UNITY_2020_2_OR_NEWER
+            // Import workers do not process Editor update requests. Starting a bridge
+            // there overwrites the interactive Editor's connection metadata.
+            if (AssetDatabase.IsAssetImportWorkerProcess()) return;
+#endif
             if (initialized)
             {
                 return;

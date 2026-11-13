@@ -146,6 +146,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     Mode mode = Mode.Explore;
     PrankStage stage = PrankStage.CurtainSequence;
+    [Header("Scene curtain visual")]
+    [SerializeField, Tooltip("Level01 white Spine curtain; retain the interaction, collision and camera anchor.")]
+    SpineCurtainDragIK curtainVisual;
+    public SpineCurtainDragIK CurtainVisual => curtainVisual;
     [SerializeField] Transform ghost;
     Transform curtain, guest, guestHead;
     PrankNpcActor guestActor;
@@ -154,8 +158,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Canvas canvas;
     GameObject embeddedHudContent;
     CurtainPossessionPrompt possessionPrompt;
-    Text prompt, inputCueIcon, status, title, actionHint, progressText, feedback, languageButtonText, difficultyButtonText;
-    Button languageButton, difficultyButton;
+    Text prompt, inputCueIcon, status, title, actionHint, progressText, feedback, difficultyButtonText;
+    Button difficultyButton;
     Text beatAssistButtonText;
     Image vignette, beatFlash, topHudPanel, bottomHudPanel;
     Canvas worldCueCanvas;
@@ -286,6 +290,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (instance != null && instance != this) { Destroy(gameObject); return; }
         instance = this;
+        language = GhostLanguage.Current;
         Application.targetFrameRate = 120;
         if (curtainPlan == null || curtainPlan.Count == 0) curtainPlan = BuildDefaultCurtainPlan();
         embeddedInLevel = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path == "Assets/LevelWhitebox/Scenes/Level01_FirstFloor.unity";
@@ -295,6 +300,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         BuildHud();
         SetExplorePrompt();
     }
+
+    void OnEnable() { GhostLanguage.Changed += OnLanguageChanged; OnLanguageChanged(); }
 
     void Start()
     {
@@ -309,6 +316,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         }
         ghost = player.transform;
         curtain = transform;
+        if (curtainVisual != null)
+        {
+            curtainVisual.UseGameplayControl();
+            var placeholder = curtain.GetComponent<MeshRenderer>();
+            if (placeholder != null) placeholder.enabled = false;
+        }
         curtainHome = curtain.position;
         curtainRotationHome = curtain.rotation;
         curtainScaleHome = curtain.localScale;
@@ -386,10 +399,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (beatClock != null) beatClock.Tick();
         UpdateFeedback();
         UpdateBeatCue();
-        if (GhostInput.KeyDown(KeyCode.L)) ToggleLanguage();
         HandleDeveloperShortcuts();
         if (mode == Mode.Explore) { if (embeddedInLevel) UpdateEmbeddedExplore(); else UpdateExplore(); }
         else UpdateCloseup();
+        UpdateCurtainDragVisual();
         gameplayCpuMs = ElapsedDiagnosticMs(diagnosticStart);
     }
 
@@ -509,6 +522,8 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void OnDisable()
     {
+        GhostLanguage.Changed -= OnLanguageChanged;
+        if (curtainVisual != null) curtainVisual.ReleaseGameplay();
         GhostInput.StopHaptics();
         RhythmAccent.ClearClock();
         // Stopping Play mode or disabling the component preserves a partial round.
@@ -685,7 +700,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         beatFlash.raycastTarget = false;
         beatFlash.transform.SetAsLastSibling();
         beatFlash.gameObject.SetActive(beatAssistEnabled);
-        languageButton = MakeLanguageButton();
         difficultyButton = MakeDifficultyButton();
         MakeBeatAssistButton();
         vignette = MakePanel("Vignette", new Vector2(0, 0), new Vector2(1, 1), new Color(0.05f, 0.02f, 0.12f, 0.0f));
@@ -782,7 +796,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         // Keep the original diagnostic view available without asking players
         // to read beat numbers, stage counters, and configuration controls.
         Component[] diagnostics = { topHudPanel, title, actionHint, progressText,
-            prompt, inputCueIcon, status, feedback, languageButton, difficultyButton };
+            prompt, inputCueIcon, status, feedback, difficultyButton };
         foreach (Component item in diagnostics)
             if (item != null) item.gameObject.SetActive(visible);
         if (bottomHudPanel != null) bottomHudPanel.gameObject.SetActive(false);
@@ -795,6 +809,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     {
         if (gameplayUI == null || canvas == null) return;
         var cue = new CurtainGameplayUI.PlayerCue();
+        cue.curtainVisual = curtainVisual;
+        cue.usingGamepad = GhostInput.UsingGamepad;
+        cue.english = language == Language.English;
+        cue.exitHint = cue.usingGamepad ? T("B 退出", "B to exit") : T("Esc 退出", "Esc to exit");
         if (mode != Mode.Closeup)
         {
             cue.kind = CurtainGameplayUI.CueKind.Automatic;
@@ -816,6 +834,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         cue.beatsToTarget = beatClock == null ? 1f : (float)(curtainTargetBeat - beatClock.BeatIndex);
         cue.tolerance = BeatTolerance;
         cue.held = curtainHeld;
+        cue.inputPressed = action == CurtainAction.Tap
+            ? (cue.usingGamepad ? GhostInput.ActiveGamepad != null && GhostInput.ActiveGamepad.buttonSouth.isPressed
+                : GhostInput.MouseHeld(0) || GhostInput.Key(KeyCode.Space))
+            : curtainHeld;
+        FillDesignerGestureRoute(ref cue);
         cue.armed = gestureArmed;
         cue.recovering = gestureRetryPending && Time.time < gestureRetryReadyAt;
         cue.motionReady = gestureStartCaptured;
@@ -831,7 +854,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             cue.instruction = action == CurtainAction.AutoApproach ? T("等客人走近", "Let the guest approach")
                 : action == CurtainAction.AutoLift ? T("窗帘正在抬起", "The curtain is lifting") : T("窗帘正在收紧", "The curtain is tightening");
             cue.timing = action == CurtainAction.AutoWrapComplete
-                ? (GhostInput.UsingGamepad ? T("自动演出 · 可以松开 RT", "Automatic · you may release RT") : T("自动演出 · 可以松开鼠标", "Automatic · you may release the mouse"))
+                ? (GhostInput.UsingGamepad ? T("自动演出 · 可以松开 RT", "Automatic · release RT") : T("自动演出 · 可以松开鼠标", "Automatic · release LMB"))
                 : T("自动演出 · 不用操作", "Automatic · no input needed");
         }
         else if (action == CurtainAction.Tap)
@@ -857,18 +880,69 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             cue.timing = GhostInput.UsingGamepad
                 ? (!cue.held ? T("先按住 RT", "Hold RT first")
                     : gestureArmed ? T("到位了 · 保持 RT 等拍点", "Ready · hold RT for the beat")
-                    : gestureStartCaptured ? T("按箭头推动左摇杆", "Push the left stick along the arrow")
-                    : T("保持 RT · 等拍圈亮起再推动摇杆", "Hold RT · move the stick when the ring lights up"))
+                    : gestureStartCaptured ? T("按箭头推动左摇杆", "Push the stick with the arrow")
+                    : T("保持 RT · 等拍圈亮起再推动摇杆", "Hold RT · wait for the ring"))
                 : !cue.held ? (GhostInput.MouseHeld(0)
-                    ? T("先松开，再按住左键", "Release, then hold the mouse button")
-                    : T("先按住左键", "Hold the left mouse button first"))
+                    ? T("先松开，再按住左键", "Release, then hold LMB")
+                    : T("先按住左键", "Hold LMB first"))
                 : gestureArmed ? T("到位了 · 按住等拍点", "Ready · keep holding for the beat")
                 : gestureStartCaptured ? T("现在跟箭头滑动", "Swipe with the arrow now")
-                : T("保持按住 · 等拍圈亮起再滑动", "Keep holding · swipe when the ring lights up");
+                : T("保持按住 · 等拍圈亮起再滑动", "Keep holding · wait for the ring");
         }
+        if (action == CurtainAction.Tap && cue.usingGamepad && GhostInput.TapNeedsRelease) cue.timing = cue.instruction;
         if (cue.recovering) cue.timing = T("回位中 · 稍等一拍", "Recovering · wait one beat");
-        cue.timing += GhostInput.UsingGamepad ? T("  ·  B 退出", "  ·  B to exit") : T("  ·  Esc 退出", "  ·  Esc to exit");
         gameplayUI.PresentPlayerCue(true, cue, cam, curtainHome);
+    }
+
+    void UpdateCurtainDragVisual()
+    {
+        if (curtainVisual == null) return;
+        if (mode != Mode.Closeup || stage != PrankStage.CurtainSequence || curtainStep >= PlanCount)
+        { curtainVisual.ReleaseGameplay(); return; }
+        CurtainAction action = PlanAction(curtainStep);
+        if (!IsDirectionalAction(action) && action != CurtainAction.Hold)
+        { curtainVisual.ReleaseGameplay(); return; }
+        var cue = new CurtainGameplayUI.PlayerCue();
+        FillDesignerGestureRoute(ref cue);
+        curtainVisual.DriveGameplay(curtainStep, cue.gestureTarget, ReadGestureProgress(action),
+            curtainHeld, action == CurtainAction.Hold,
+            gestureRetryPending && Time.time < gestureRetryReadyAt, cam);
+    }
+
+    // Presentation coordinates only. The same authored plan and current step
+    // drive the preview; automatic transitions never invent a future target beat.
+    void FillDesignerGestureRoute(ref CurtainGameplayUI.PlayerCue cue)
+    {
+        Vector2 cursor = Vector2.zero;
+        for (int i = 0; i <= curtainStep && i < PlanCount; i++)
+        {
+            CurtainAction action = PlanAction(i);
+            if (IsAutomaticAction(action) || action == CurtainAction.Tap) cursor = Vector2.zero;
+            Vector2 origin = cursor;
+            cursor = DesignerGestureTarget(cursor, action);
+            if (i != curtainStep) continue;
+            cue.gestureOrigin = origin;
+            cue.gestureTarget = cursor;
+            if (i + 1 < PlanCount && IsDirectionalAction(PlanAction(i + 1)))
+            {
+                cue.nextGestureTarget = DesignerGestureTarget(cursor, PlanAction(i + 1));
+                cue.hasNextDirection = cue.nextGestureTarget != cursor;
+            }
+        }
+    }
+
+    static Vector2 DesignerGestureTarget(Vector2 from, CurtainAction action)
+    {
+        switch (action)
+        {
+            case CurtainAction.DragRight:
+            case CurtainAction.SwipeRight: return new Vector2(1f, from.y);
+            case CurtainAction.SwipeLeft: return new Vector2(-1f, from.y);
+            case CurtainAction.DragDown: return new Vector2(from.x, -1f);
+            case CurtainAction.WindLeft: return new Vector2(-1f, -1f);
+            case CurtainAction.ThrowRightRelease: return new Vector2(1f, 1f);
+            default: return from;
+        }
     }
 
     string PlayerControlIcon(CurtainAction action)
@@ -1491,6 +1565,16 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             retryMessage = "";
             ShowFeedback(T("卡点！", "ON BEAT!"), new Color(1f, 0.84f, 0.3f));
             lastPerformedAction = PlanAction(curtainStep);
+            if (curtainVisual != null)
+            {
+                if (lastPerformedAction == CurtainAction.Tap) curtainVisual.ConfirmTap();
+                else if (IsDirectionalAction(lastPerformedAction))
+                {
+                    var route = new CurtainGameplayUI.PlayerCue();
+                    FillDesignerGestureRoute(ref route);
+                    curtainVisual.CompleteGameplayDrag(route.gestureTarget, cam);
+                }
+            }
             GhostInput.RhythmCue cue = lastPerformedAction == CurtainAction.Tap ? GhostInput.RhythmCue.Tap :
                 lastPerformedAction == CurtainAction.SwipeLeft || lastPerformedAction == CurtainAction.SwipeRight ? GhostInput.RhythmCue.Impact :
                 lastPerformedAction == CurtainAction.Hold ? GhostInput.RhythmCue.Hold :
@@ -1600,7 +1684,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         GhostInput.StopHaptics();
         motionFinishPending = motionSessionActive;
         ResetGestureState();
-        mode = Mode.Explore; title.text = "客厅 · 探索"; prompt.text = ""; actionHint.text = ExploreControls(); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); GhostPlayerAvatar.Teleport(ghost, embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos);
+        mode = Mode.Explore; title.text = T("客厅 · 探索", "Living Room · Explore"); prompt.text = ""; actionHint.text = ExploreControls(); vignette.color = new Color(0.05f, 0.02f, 0.12f, 0f); GhostPlayerAvatar.Teleport(ghost, embeddedInLevel ? embeddedGhostReturnPosition : exploreGhostPos);
         GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         GhostPlayerAvatar.SetVisible(ghost, true);
         if (embeddedInLevel) SetEmbeddedHudVisible(false);
@@ -1612,6 +1696,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void ResetGestureState()
     {
+        if (curtainVisual != null) curtainVisual.ReleaseGameplay();
         gestureGamepad = null;
         gestureStart = Vector3.zero;
         curtainHeld = false;
@@ -1807,6 +1892,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             guest.localScale = Vector3.Lerp(guestLaunchScale, guestScaleHome, release);
         }
 
+        // Keep the interaction/camera anchor fixed when IK owns the visual.
+        // The existing guest reaction choreography still runs above.
+        if (curtainVisual != null)
+        {
+            curtain.position = curtainHome;
+            curtain.rotation = curtainRotationHome;
+            curtain.localScale = curtainScaleHome;
+        }
         if (guestHead != null)
         {
             guestHead.position = guest.position + new Vector3(0f, 0.88f, 0f);
@@ -1971,15 +2064,34 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     string T(string chinese, string english) { return language == Language.Chinese ? chinese : english; }
 
-    void ToggleLanguage()
+    void ToggleLanguage() { GhostLanguage.Toggle(); }
+
+    void OnLanguageChanged()
     {
-        language = language == Language.Chinese ? Language.English : Language.Chinese;
-        if (languageButtonText != null) languageButtonText.text = language == Language.Chinese ? "EN" : "中";
+        language = GhostLanguage.Current;
+        // Cached messages are in the old language. Refresh presentation only;
+        // keep the current step, held gesture and audio clock untouched.
+        retryMessage = "";
+        renderedHudStep = renderedCueStep = -1;
+        if (title == null) return;
         if (difficultyButtonText != null) difficultyButtonText.text = DifficultyLabel();
         if (beatAssistButtonText != null) beatAssistButtonText.text = BeatAssistLabel();
-        if (mode == Mode.Explore) SetExplorePrompt();
-        else UpdateStageHud();
-        ShowFeedback(language == Language.Chinese ? "已切换中文" : "Switched to English", new Color(0.55f, 0.95f, 1f));
+        if (mode == Mode.Explore)
+        {
+            SetExplorePrompt();
+            actionHint.text = ExploreControls();
+            progressText.text = T("当前目标：找到窗帘和客人", "Objective: find the curtain and guest");
+            status.text = T("靠近右侧窗帘开始恶作剧", "Approach the curtain to start the prank");
+        }
+        else
+        {
+            UpdateStageHud();
+            if (stage == PrankStage.CurtainSequence && curtainStep < PlanCount) UpdateCurtainCue(CurrentAction);
+        }
+        if (feedback != null) feedback.text = "";
+        feedbackUntil = 0f;
+        if (gameplayUI != null) gameplayUI.ClearPlayerFeedback();
+        UpdatePlayerHud();
     }
 
     void ToggleDifficulty()
@@ -1999,19 +2111,6 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     float GestureThreshold { get { return difficulty == Difficulty.Easy ? easyGestureThreshold : curtainGestureThreshold; } }
     int MissesPerEscapeSegment { get { return difficulty == Difficulty.Easy ? easyMissesPerEscapeSegment : normalMissesPerEscapeSegment; } }
     float BeatDurationSeconds { get { return 60f / Mathf.Max(1f, beatBpm); } }
-
-    Button MakeLanguageButton()
-    {
-        var go = new GameObject("LanguageButton");
-        go.transform.SetParent(canvas.transform, false);
-        var rt = go.AddComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0.31f, 0.945f); rt.anchorMax = new Vector2(0.35f, 0.98f); rt.offsetMin = rt.offsetMax = Vector2.zero;
-        var image = go.AddComponent<Image>(); image.color = new Color(0.15f, 0.22f, 0.32f, 0.95f);
-        var button = go.AddComponent<Button>(); button.targetGraphic = image; button.onClick.AddListener(ToggleLanguage);
-        var label = new GameObject("Label"); label.transform.SetParent(go.transform, false); var textRt = label.AddComponent<RectTransform>(); textRt.anchorMin = Vector2.zero; textRt.anchorMax = Vector2.one; textRt.offsetMin = textRt.offsetMax = Vector2.zero;
-        languageButtonText = label.AddComponent<Text>(); languageButtonText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); languageButtonText.fontSize = 12; languageButtonText.alignment = TextAnchor.MiddleCenter; languageButtonText.color = Color.white; languageButtonText.text = language == Language.Chinese ? "EN" : "中";
-        return button;
-    }
 
     Button MakeDifficultyButton()
     {

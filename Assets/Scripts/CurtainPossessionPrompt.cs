@@ -21,6 +21,7 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
     Canvas host;
     Camera view;
     Image bubble;
+    GameObject chineseCaption;
     LevelCurtainEncounter encounter;
     WhiteboxPlayable floor;
 
@@ -43,6 +44,28 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
             bubble.raycastTarget = false;
             bubble.preserveAspect = true;
             bubble.color = Color.white;
+            // Preserve the approved bubble outline and device badge. Only cover
+            // the baked English word in Chinese mode, using live localized type.
+            chineseCaption = new GameObject("ChineseCaption", typeof(RectTransform), typeof(Image));
+            chineseCaption.transform.SetParent(bubble.transform, false);
+            var captionRect = (RectTransform)chineseCaption.transform;
+            captionRect.anchorMin = new Vector2(0.37f, 0.28f);
+            captionRect.anchorMax = new Vector2(0.95f, 0.76f);
+            captionRect.offsetMin = captionRect.offsetMax = Vector2.zero;
+            var fill = chineseCaption.GetComponent<Image>();
+            fill.color = Color.white; fill.raycastTarget = false;
+            var word = new GameObject("Word", typeof(RectTransform), typeof(Text));
+            word.transform.SetParent(chineseCaption.transform, false);
+            var wordRect = (RectTransform)word.transform;
+            wordRect.anchorMin = Vector2.zero; wordRect.anchorMax = Vector2.one;
+            wordRect.offsetMin = wordRect.offsetMax = Vector2.zero;
+            var text = word.GetComponent<Text>();
+            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            text.fontSize = 28; text.fontStyle = FontStyle.Bold;
+            text.resizeTextForBestFit = true; text.resizeTextMinSize = 22; text.resizeTextMaxSize = 28;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.color = new Color(0.08f, 0.09f, 0.1f);
+            text.text = "附身"; text.raycastTarget = false;
         }
         Hide();
     }
@@ -71,9 +94,10 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
         rect.localScale = Vector3.one;
         bubble.sprite = sprite;
         bubble.enabled = true;
+        chineseCaption.SetActive(!GhostLanguage.English);
     }
 
-    public void Hide() { if (bubble != null) bubble.enabled = false; }
+    public void Hide() { if (bubble != null) bubble.enabled = false; if (chineseCaption != null) chineseCaption.SetActive(false); }
     void OnDisable() { Hide(); }
     void OnDestroy() { if (bubble != null) Destroy(bubble.gameObject); }
     void OnValidate()

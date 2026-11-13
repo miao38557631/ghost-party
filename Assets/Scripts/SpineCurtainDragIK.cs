@@ -4,33 +4,11 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// SampleScene-only Spine curtain drag prototype. Attach this component to
-/// "Curtain Drag IK Preview" with Curtain_SkeletonData; it creates its own
-/// SkeletonAnimation child at runtime. It does not replace Level01's curtain.
-///
-/// Handoff for the rhythm/prank integration:
-/// - LevelCurtainEncounter starts the existing GhostPartyPrototype sequence.
-///   GhostPartyPrototype.HandleCurtainSequence owns gesture/beat judgement;
-///   UpdatePrankVisuals still poses the old cube curtain. Replace that visual
-///   path there, rather than adding a second rhythm judge in this component.
-/// - This prototype alone reads Mouse.current and starts a drag only near the
-///   middle hem tip. Route the gameplay's press/hold/release and pointer to
-///   this solver when integrating, so one input stream drives both the pose
-///   and beat judgement. Gamepad-driven targets are not implemented here.
-/// - Pointer projection is camera-ray/curtain-plane based (local Spine XY).
-///   The prank's gesture thresholds currently use screen-space mouse delta;
-///   keep that distinction when connecting the two systems.
-/// - Bone1/2/3 have separate bend limits, increasing down the curtain.
-///   Bone4's origin is the pinned lower-chain pivot; Bone4..8 use original
-///   lengths. A held tip follows the target
-///   directly within reach; releaseSpring/releaseDamping return it to rest.
-///   Projected gravity adds a small, delayed sag to the inner guide nodes and
-///   assists the tip's fall after release. It never moves the held tip.
-/// - The current export has one mesh. Drag_Ctrl/L_Ctrl/R_Ctrl have zero mesh
-///   weights, so extreme folds can overlap black outlines and the visible
-///   hem is not guaranteed to coincide with the solved M_Bone8 tip. This is
-///   an art/rigging limitation still open after the SampleScene test.
-/// - OnGUI's plus marker and F6 sweep are SampleScene debug aids only.
+/// Shared Spine curtain solver. Level01 is driven by the rhythm gameplay;
+/// unbound previews retain mouse dragging at the lower middle hem.
+/// Only GhostPartyPrototype judges input and beats. The solver poses Bone4..8
+/// with their original lengths and returns the released tip with a spring.
+/// The current single-mesh export can overlap outlines in extreme folds.
 /// </summary>
 [DefaultExecutionOrder(-100)]
 public sealed class SpineCurtainDragIK : MonoBehaviour
@@ -71,6 +49,108 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
     private float bone2BendDegrees = 4f;
     [SerializeField, Range(0f, 30f), Tooltip("Bone3 的最大附加转角，单位为度。建议比 Bone2 大；Bone4 以下由自由求解接续弯曲。")]
     private float bone3BendDegrees = 10f;
+
+    [Header("Rhythm gameplay integration")]
+    [SerializeField, Tooltip("由附身流程驱动；关闭独立鼠标抓取、十字调试图标和 F6。")]
+    private bool gameplayControlled;
+    [SerializeField, Range(0.2f, 0.8f), Tooltip("左右目标距离，占下半段骨链长度的比例。")]
+    private float gameplaySideReach = 0.62f;
+    [SerializeField, Range(0.15f, 0.85f), Tooltip("普通挥击目标抬起的高度比例，为向下拉预留足够行程。")]
+    private float gameplayLift = 0.48f;
+    [SerializeField, Range(0.2f, 0.8f), Tooltip("上下点位间距，占下半段骨链长度的比例；最终仍限制在可达范围内。")]
+    private float gameplayVerticalReach = 0.40f;
+    [SerializeField, Range(0.15f, 1f), Tooltip("向下拉时保留的横向偏移比例。下摆向中央回落，拉开上下点位，同时避免靠抬高上端来扩大间距。")]
+    private float gameplayLowerSideScale = 0.35f;
+    private int gameplayStep = -1;
+    private Vector2 gameplayOrigin, gameplayGoal;
+    private bool gameplayGrip;
+
+    public bool IsReady => ready;
+    public bool GameplayControlled => gameplayControlled;
+    public bool IsGrabbed => dragging;
+    public Vector3 GrabWorldPosition => ready ? spineAnimation.transform.TransformPoint(nodes[MovingBones]) : transform.position;
+    public Vector3 RestGrabWorldPosition => ready ? spineAnimation.transform.TransformPoint(restHem) : transform.position;
+    public Vector3 GestureOriginWorld => ready ? spineAnimation.transform.TransformPoint(gameplayOrigin) : transform.position;
+    public Vector3 GestureTargetWorld => ready ? spineAnimation.transform.TransformPoint(gameplayGoal) : transform.position;
+
+    public void UseGameplayControl()
+    {
+        gameplayControlled = true;
+        ReleaseGameplay();
+    }
+
+    // Cloth destinations only; this component never judges an input or beat.
+    public Vector3 RouteWorldPosition(Vector2 route, Camera view)
+    {
+        if (!ready || route == Vector2.zero) return RestGrabWorldPosition;
+        Vector2 center = restNodes[0] + Vector2.down * maxReach * (1f - gameplayLift);
+        float side = 1f;
+        if (view != null)
+        {
+            Vector3 a = view.WorldToScreenPoint(spineAnimation.transform.TransformPoint(center));
+            Vector3 b = view.WorldToScreenPoint(spineAnimation.transform.TransformPoint(center + Vector2.right));
+            side = b.x >= a.x ? 1f : -1f;
+        }
+        // A lower target must also come inward: pulling straight down at the
+        // outer edge gets clamped to the reach circle and collapses the travel.
+        float lowerSideScale = Mathf.Lerp(1f, gameplayLowerSideScale, Mathf.Clamp01(-route.y));
+        Vector2 point = center + new Vector2(route.x * side * maxReach * gameplaySideReach * lowerSideScale,
+            route.y * maxReach * gameplayVerticalReach);
+        // A stable rest pivot keeps the preview from moving with the upper bend.
+        point = restNodes[0] + Vector2.ClampMagnitude(point - restNodes[0], maxReach * 0.98f);
+        return spineAnimation.transform.TransformPoint(point);
+    }
+
+    public void DriveGameplay(int step, Vector2 route, float progress, bool held, bool hold, bool recovering, Camera view)
+    {
+        if (!ready || !gameplayControlled) return;
+        if (step != gameplayStep)
+        {
+            gameplayStep = step;
+            gameplayOrigin = target;
+            Vector3 local = spineAnimation.transform.InverseTransformPoint(RouteWorldPosition(route, view));
+            gameplayGoal = new Vector2(local.x, local.y);
+        }
+        if (!held || recovering) { ReleaseGrip(); return; }
+        if (!gameplayGrip) gameplayOrigin = target;
+        gameplayGrip = dragging = true;
+        if (hold) return;
+        Vector2 previous = target;
+        target = ClampToReach(Vector2.Lerp(gameplayOrigin, gameplayGoal, Mathf.Clamp01(progress)));
+        targetVelocity = Vector2.ClampMagnitude((target - previous) / Mathf.Max(0.001f, Time.deltaTime), 18f);
+    }
+
+    public void CompleteGameplayDrag(Vector2 route, Camera view)
+    {
+        if (!ready || !gameplayControlled) return;
+        Vector3 local = spineAnimation.transform.InverseTransformPoint(RouteWorldPosition(route, view));
+        target = ClampToReach(new Vector2(local.x, local.y));
+        // Preserve the endpoint even when a fast input advances the plan in one frame.
+        gameplayOrigin = gameplayGoal = target;
+    }
+
+    public void ConfirmTap()
+    {
+        if (!ready || !gameplayControlled) return;
+        targetVelocity += new Vector2(lastBendSide * maxReach * 1.8f, maxReach * 0.65f);
+        rippleAmplitude = rippleStrength;
+        lastBendSide = -lastBendSide;
+    }
+
+    private void ReleaseGrip()
+    {
+        if (dragging) rippleAmplitude = Mathf.Max(rippleAmplitude, Mathf.Min(rippleStrength, targetVelocity.magnitude * 0.08f));
+        gameplayGrip = dragging = false;
+    }
+
+    public void ReleaseGameplay()
+    {
+        ReleaseGrip();
+        gameplayStep = -1;
+    }
+
+    private void OnDisable() { ReleaseGameplay(); }
+    private void OnApplicationFocus(bool focused) { if (!focused) ReleaseGameplay(); }
 
     private const int FirstMovingBone = 3; // Bone4 begins the unrestricted lower chain.
     private const int MovingBones = 5;
@@ -179,9 +259,10 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
 
     private void Update()
     {
-        if (!ready || Mouse.current == null) return;
+        if (!ready) return;
+        if (gameplayControlled && (Time.timeScale <= 0f || GhostInput.Suspended)) ReleaseGameplay();
 
-        if (Mouse.current.leftButton.wasPressedThisFrame && TryGetMouseOnCurtain(out Vector2 press))
+        if (!gameplayControlled && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && TryGetMouseOnCurtain(out Vector2 press))
         {
             if (Vector2.Distance(press, nodes[MovingBones]) <= grabRadius)
             {
@@ -189,7 +270,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
             }
         }
 
-        if (Mouse.current.leftButton.wasReleasedThisFrame)
+        if (!gameplayControlled && Mouse.current != null && Mouse.current.leftButton.wasReleasedThisFrame)
         {
             dragging = false;
             rippleAmplitude = Mathf.Max(rippleAmplitude,
@@ -200,7 +281,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         if (dt <= 0f) return;
 
 #if UNITY_EDITOR
-        if (Keyboard.current != null && Keyboard.current.f6Key.wasPressedThisFrame)
+        if (!gameplayControlled && Keyboard.current != null && Keyboard.current.f6Key.wasPressedThisFrame)
         {
             autoSweep = !autoSweep;
             autoSweepTime = 0f;
@@ -224,7 +305,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
 #endif
 
         Vector2 desired = dragging ? target : restHem;
-        if (dragging && Mouse.current.leftButton.isPressed && TryGetMouseOnCurtain(out Vector2 mouse))
+        if (!gameplayControlled && dragging && Mouse.current != null && Mouse.current.leftButton.isPressed && TryGetMouseOnCurtain(out Vector2 mouse))
         {
             desired = ClampToReach(mouse);
         }
@@ -477,7 +558,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
 
     private void OnGUI()
     {
-        if (!Application.isPlaying || !ready || inputCamera == null) return;
+        if (gameplayControlled || !Application.isPlaying || !ready || inputCamera == null) return;
 
         Rect panel = new Rect(Screen.width - 266, 16, 250, 86);
         GUI.Box(panel, "Curtain drag IK");
