@@ -8,10 +8,11 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Curtain_Material
-  m_Shader: {fileID: 4800000, guid: 1e8a610c9e01c3648bac42585e5fc676, type: 3}
+  m_Shader: {fileID: 4800000, guid: 2b8565b650923d644a24faf2d4c3ce9d, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords: []
+  m_ValidKeywords:
+  - _STRAIGHT_ALPHA_INPUT
   m_InvalidKeywords:
   - _USE8NEIGHBOURHOOD_ON
   m_LightmapFlags: 4
@@ -20,7 +21,7 @@ Material:
   m_CustomRenderQueue: -1
   stringTagMap: {}
   disabledShaderPasses: []
-  m_LockedProperties:
+  m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
@@ -30,6 +31,9 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
+    - _CultDarkThreshold: 0.18
+    - _CultLightThreshold: 0.58
+    - _CultSoftness: 0.09
     - _Cutoff: 0.1
     - _Fill: 0
     - _OutlineMipLevel: 0
@@ -37,12 +41,21 @@ Material:
     - _OutlineReferenceTexWidth: 1024
     - _OutlineSmoothness: 1
     - _OutlineWidth: 3
+    - _SableSoftness: 0.025
+    - _SableThreshold: 0.46
     - _StencilComp: 8
     - _StencilRef: 1
-    - _StraightAlphaInput: 0
+    - _StraightAlphaInput: 1
     - _ThresholdEnd: 0.25
+    - _ToonLook: 2
+    - _ToonStrength: 1
     - _Use8Neighbourhood: 1
     - _UseScreenSpaceOutlineWidth: 0
     m_Colors:
+    - _CultDeepTint: {r: 0.69, g: 0.56999993, b: 0.73, a: 1}
+    - _CultLightTint: {r: 1, g: 0.95, b: 0.85, a: 1}
+    - _CultShadowTint: {r: 0.78, g: 0.61, b: 0.76, a: 1}
     - _OutlineColor: {r: 1, g: 1, b: 0, a: 1}
+    - _SableLightTint: {r: 1, g: 0.97999996, b: 0.94, a: 1}
+    - _SableShadowTint: {r: 0.78, g: 0.8, b: 0.88, a: 1}
   m_BuildTextureStacks: []

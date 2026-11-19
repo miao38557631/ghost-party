@@ -40,7 +40,7 @@ public static class GhostWallCutoutTool
             text.AppendLine("WALL ROOT: " + wall.name + Describe(wall.gameObject));
             GhostWallCutout cutout = wall.GetComponent<GhostWallCutout>();
             text.AppendLine("  component: " + (cutout != null
-                ? "present, remaining wall height " + cutout.RemainingHeight.ToString("0.00") + " world units"
+                ? "present, occluded wall opacity " + cutout.OccludedOpacity.ToString("P0")
                 : "missing (Play adds it automatically)"));
             Renderer[] renderers = wall.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < renderers.Length && i < 12; i++)

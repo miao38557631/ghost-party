@@ -130,7 +130,7 @@ public static class GhostPlayerArtPlayChecks
             if (stage == 0)
             {
                 Check(UnityEngine.Object.FindObjectsOfType<Transform>().Count(t => t.name == "InvisibleGhost") == 1, "Exactly one InvisibleGhost");
-                Check(root.GetComponent<CharacterController>() != null && root.GetComponents<Renderer>().All(r => !r.enabled), "One CharacterController provides 3D blocking; placeholder renderers absent or disabled");
+                Check(root.GetComponent<CharacterController>() != null && root.GetComponents<Renderer>().All(r => !r.enabled), "One CharacterController keeps floor and air-wall collision; placeholder renderers absent or disabled");
                 var pos = root.transform.position; var scale = root.transform.localScale; var rot = root.transform.rotation;
                 Check(GhostPlayerAvatar.Create(pos + Vector3.one) == root.transform && root.transform.position == pos, "Shared factory is idempotent and does not move an existing root");
                 Check(renderer != null && renderer.sprite != null && renderer.color == Color.white && !renderer.flipX, "Native sprite present, white tint, authored right-facing initial state");
@@ -276,26 +276,29 @@ public static class GhostPlayerArtPlayChecks
             wall.transform.position = new Vector3(1002f, 1f, 1000f);
             box.size = new Vector3(0.08f, 2f, 20f);
             Physics.SyncTransforms();
-            Check(!Physics.GetIgnoreLayerCollision(root.layer, wall.layer), "Player/wall 3D layer collision pair is enabled");
             motor.Teleport(new Vector3(1000f, originalPosition.y, 1000f));
+            Check(Physics.GetIgnoreCollision(controller, box), "An ordinary scene collider is ignored only by the ghost");
+            for (int i = 0; i < 90; i++) motor.Move(Vector3.right, 1f / 60f);
+            Check(root.transform.position.x > box.bounds.max.x + 0.5f,
+                "The ghost passes through an ordinary solid wall");
+
+            wall.AddComponent<GhostAirWall>();
+            motor.Teleport(new Vector3(1000f, originalPosition.y, 1000f));
+            Check(!Physics.GetIgnoreCollision(controller, box), "GhostAirWall restores the solid collision pair");
             CollisionFlags flags = CollisionFlags.None;
             for (int i = 0; i < 360; i++) flags |= motor.Move(Vector3.right, 1f / 60f);
             float radius = controller.radius * Mathf.Abs(root.transform.lossyScale.x);
             float stopLimit = box.bounds.min.x - radius;
             Check(root.transform.position.x <= stopLimit + 0.08f && root.transform.position.x >= stopLimit - 0.15f
                 && (flags & CollisionFlags.Sides) != 0,
-                "Six seconds of sustained pressure cannot pass an 8cm solid wall");
-            motor.Teleport(new Vector3(1000f, originalPosition.y, 995f));
-            for (int i = 0; i < 180; i++) motor.Move(new Vector3(1, 0, 1), 1f / 60f);
-            Check(root.transform.position.x <= stopLimit + 0.08f && root.transform.position.z > 1000f,
-                "Diagonal input slides along the wall without crossing it");
+                "Six seconds of sustained pressure cannot pass an 8cm air wall");
             motor.Teleport(new Vector3(1000f, originalPosition.y, 1000f));
             motor.Move(Vector3.right, 1f);
-            Check(root.transform.position.x <= stopLimit + 0.08f, "Long frame movement still sweeps against thin walls");
+            Check(root.transform.position.x <= stopLimit + 0.08f, "Long frame movement still sweeps against thin air walls");
             GhostPlayerAvatar.SetVisible(root.transform, false);
             motor.Move(Vector3.right, 0.5f);
             Check(controller.enabled && root.transform.position.x <= stopLimit + 0.08f,
-                "Possession visibility never disables physical blocking");
+                "Possession visibility never disables air-wall blocking");
             GhostPlayerAvatar.SetVisible(root.transform, true);
             Check(root.transform.localScale == originalScale && root.transform.rotation == originalRotation,
                 "Collision/visibility operations leave the control root scale and orientation intact");
@@ -306,37 +309,13 @@ public static class GhostPlayerArtPlayChecks
             motor.Teleport(originalPosition);
             GhostPlayerAvatar.SetVisible(root.transform, true);
         }
-        // Also exercise an actual authored wall; the isolated barrier above tests thin-wall/sliding mechanics.
+        // Existing scene walls must no longer block the ghost.
         var group = GameObject.Find("02_BlackPlanLines_Walls_2m_80mm");
         var candidates = group != null ? group.GetComponentsInChildren<BoxCollider>()
             : UnityEngine.Object.FindObjectsOfType<BoxCollider>().Where(c => c.name == "BackWall").ToArray();
-        bool tested = false;
-        foreach (var box in candidates)
-        {
-            if (!box.enabled || box.isTrigger || box.size.x * Mathf.Abs(box.transform.lossyScale.x) < 3f) continue;
-            Vector3 normal = box.transform.forward; normal.y = 0; normal.Normalize();
-            float halfThickness = box.size.z * Mathf.Abs(box.transform.lossyScale.z) * 0.5f;
-            float radius = controller.radius * Mathf.Abs(root.transform.lossyScale.x);
-            Vector3 centre = box.transform.TransformPoint(box.center); centre.y = originalPosition.y;
-            Vector3 start = centre + normal * (halfThickness + radius + 0.6f);
-            Vector3 bottom = start + Vector3.up * (controller.height * 0.5f * root.transform.lossyScale.y - radius);
-            Vector3 top = start - Vector3.up * (controller.height * 0.5f * root.transform.lossyScale.y - radius);
-            if (Physics.OverlapCapsule(bottom, top, radius * 0.95f, ~0, QueryTriggerInteraction.Ignore)
-                .Any(c => !c.transform.IsChildOf(root.transform))) continue;
-            try
-            {
-                motor.Teleport(start);
-                CollisionFlags flags = CollisionFlags.None;
-                for (int i = 0; i < 120; i++) flags |= motor.Move(-normal, 1f / 60f);
-                float separation = Vector3.Dot(root.transform.position - centre, normal);
-                Check(separation >= halfThickness + radius - 0.08f && (flags & CollisionFlags.Sides) != 0,
-                    "Authored wall blocks the real controller: " + box.name + " | " + box.bounds);
-                tested = true;
-            }
-            finally { motor.Teleport(originalPosition); }
-            break;
-        }
-        Check(tested, "A real scene wall collider was tested, not only a synthetic barrier");
+        if (candidates.Length > 0)
+            Check(candidates.Where(box => box.enabled && !box.isTrigger).All(box => Physics.GetIgnoreCollision(controller, box)),
+                "Authored wall colliders are ignored by the ghost");
         GhostPlayerAvatar.SetMovement(root.transform, Vector3.zero);
     }
 

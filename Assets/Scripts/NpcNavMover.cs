@@ -44,6 +44,7 @@ public sealed class NpcNavMover : MonoBehaviour
     bool paused;
     bool roamingToPoint;
     Vector3 roamDestination;
+    Vector3 roamOrigin;
     float roamStartedAt;
     NavMeshPath candidatePath;
     Transform artwork;
@@ -65,6 +66,7 @@ public sealed class NpcNavMover : MonoBehaviour
     void Start()
     {
         if (!agent.enabled) AttachToNavMesh();
+        roamOrigin = transform.position;
     }
 
     void Update()
@@ -152,9 +154,11 @@ public sealed class NpcNavMover : MonoBehaviour
         {
             Vector2 offset = Random.insideUnitCircle * roamRadius;
             if (offset.sqrMagnitude < minimumWalkDistance * minimumWalkDistance) continue;
-            Vector3 candidate = transform.position + new Vector3(offset.x, 0f, offset.y);
+            Vector3 candidate = roamOrigin + new Vector3(offset.x, 0f, offset.y);
             NavMeshHit hit;
             if (!NavMesh.SamplePosition(candidate, out hit, 2f, agent.areaMask)) continue;
+            Vector2 fromHome = new Vector2(hit.position.x - roamOrigin.x, hit.position.z - roamOrigin.z);
+            if (fromHome.sqrMagnitude > roamRadius * roamRadius) continue;
             Vector3 travel = hit.position - transform.position;
             travel.y = 0f;
             if (travel.sqrMagnitude < minimumWalkDistance * minimumWalkDistance) continue;
@@ -238,6 +242,7 @@ public sealed class NpcNavMover : MonoBehaviour
 
     public void SetRandomRoam(bool value) { randomRoam = value; }
     public void SetRoamRadius(float value) { roamRadius = Mathf.Max(1f, value); }
+    public void SetMinimumWalkDistance(float value) { minimumWalkDistance = Mathf.Max(0f, value); }
 
     /// <summary>Lets a scripted encounter move this transform directly without fighting the agent.</summary>
     public void SuspendNavigation()

@@ -8,7 +8,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Wall
-  m_Shader: {fileID: 46, guid: 0000000000000000f000000000000000, type: 0}
+  m_Shader: {fileID: 4800000, guid: e42f47eaf9434cf188ba3ae3db301ba6, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -62,22 +62,38 @@ Material:
     m_Ints: []
     m_Floats:
     - _BumpScale: 1
+    - _CultDarkThreshold: 0.18
+    - _CultLightThreshold: 0.58
+    - _CultSoftness: 0.09
     - _Cutoff: 0.5
     - _DetailNormalMapScale: 1
     - _DstBlend: 0
+    - _GhostCutawayEnabled: 0
+    - _GhostSourceShader: 1
+    - _GhostWallTop: 10000
     - _GlossMapScale: 1
     - _Glossiness: 0.08
     - _GlossyReflections: 1
     - _Metallic: 0
     - _Mode: 0
     - _OcclusionStrength: 1
+    - _OutlinePixels: 1.75
     - _Parallax: 0.02
+    - _SableSoftness: 0.025
+    - _SableThreshold: 0.46
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
     - _SrcBlend: 1
+    - _ToonLook: 2
     - _UVSec: 0
     - _ZWrite: 1
     m_Colors:
     - _Color: {r: 0.88, g: 0.89, b: 0.91, a: 1}
+    - _CultDeepTint: {r: 0.69, g: 0.56999993, b: 0.73, a: 1}
+    - _CultLightTint: {r: 1, g: 0.95, b: 0.85, a: 1}
+    - _CultShadowTint: {r: 0.78, g: 0.61, b: 0.76, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
+    - _OutlineColor: {r: 0.11999995, g: 0.079999976, b: 0.15999997, a: 1}
+    - _SableLightTint: {r: 1, g: 0.97999996, b: 0.94, a: 1}
+    - _SableShadowTint: {r: 0.78, g: 0.8, b: 0.88, a: 1}
   m_BuildTextureStacks: []

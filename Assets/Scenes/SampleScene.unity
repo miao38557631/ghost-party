@@ -397,7 +397,6 @@ MonoBehaviour:
   language: 0
   difficulty: 0
   beatAssistEnabled: 0
-  moveSpeed: 4.5
   interactionRange: 2
   beatBpm: 112
   bgmVolume: 0.34
@@ -588,8 +587,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 67c541e8e87a4a70acf3f23609df65ed, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   skeletonDataAsset: {fileID: 11400000, guid: ea002b9e3e8dd5d4e81507d26813ea0b, type: 2}
   leftRoot: L_Bone
   middleRoot: M_Bone
@@ -597,17 +596,17 @@ MonoBehaviour:
   grabRadius: 0.48
   solverIterations: 64
   bendHint: 0.65
-  elbowDownBias: 2
+  elbowDownBias: 2.4
   sideSwitchWidth: 0.366
   releaseSpring: 7
   releaseDamping: 0.36
   gravityAcceleration: 20
-  rippleStrength: 0.28
+  rippleStrength: 0.279
   rippleFrequency: 3.5
   rippleDecay: 2
   bone1BendDegrees: 0.5
-  bone2BendDegrees: 6.3
-  bone3BendDegrees: 26.9
+  bone2BendDegrees: 9.76
+  bone3BendDegrees: 30
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

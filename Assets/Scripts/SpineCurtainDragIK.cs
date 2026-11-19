@@ -61,9 +61,15 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
     private float gameplayVerticalReach = 0.40f;
     [SerializeField, Range(0.15f, 1f), Tooltip("向下拉时保留的横向偏移比例。下摆向中央回落，拉开上下点位，同时避免靠抬高上端来扩大间距。")]
     private float gameplayLowerSideScale = 0.35f;
+    [Header("Explore beat hint")]
+    [SerializeField, Range(0f, 0.5f), Tooltip("探索时重拍抬起下摆的幅度，占下半段骨链长度的比例。设为 0 可关闭抬动。")]
+    private float idleBeatLift = 0.035f;
+    [SerializeField, Range(0f, 0.5f), Tooltip("探索时重拍左右轻摆的幅度，占下半段骨链长度的比例。")]
+    private float idleBeatSway = 0.014f;
     private int gameplayStep = -1;
     private Vector2 gameplayOrigin, gameplayGoal;
     private bool gameplayGrip;
+    private bool idleBeatHintEnabled;
 
     public bool IsReady => ready;
     public bool GameplayControlled => gameplayControlled;
@@ -77,6 +83,11 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
     {
         gameplayControlled = true;
         ReleaseGameplay();
+    }
+
+    public void SetIdleBeatHint(bool enabled)
+    {
+        idleBeatHintEnabled = enabled;
     }
 
     // Cloth destinations only; this component never judges an input or beat.
@@ -197,12 +208,19 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
             return;
         }
 
-        var components = SkeletonAnimation.NewSkeletonAnimationGameObject(skeletonDataAsset);
-        spineAnimation = components.skeletonAnimation;
-        spineAnimation.gameObject.name = "Curtain Spine (drag IK)";
-        spineAnimation.transform.SetParent(transform, false);
+        // The authored child renders the resting curtain in Edit Mode. Older
+        // prefabs still work by creating the same child when Play starts.
+        spineAnimation = GetComponentInChildren<SkeletonAnimation>(true);
+        if (spineAnimation == null)
+        {
+            var components = SkeletonAnimation.NewSkeletonAnimationGameObject(skeletonDataAsset);
+            spineAnimation = components.skeletonAnimation;
+            spineAnimation.gameObject.name = "Curtain Spine (drag IK)";
+            spineAnimation.transform.SetParent(transform, false);
+        }
+        else spineAnimation.Initialize(true);
 
-        skeleton = components.skeletonRenderer.Skeleton;
+        skeleton = spineAnimation.Skeleton;
         string[] roots = { leftRoot, middleRoot, rightRoot };
         for (int column = 0; column < 3; column++)
         {
@@ -304,7 +322,7 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         }
 #endif
 
-        Vector2 desired = dragging ? target : restHem;
+        Vector2 desired = dragging ? target : restHem + IdleBeatOffset();
         if (!gameplayControlled && dragging && Mouse.current != null && Mouse.current.leftButton.isPressed && TryGetMouseOnCurtain(out Vector2 mouse))
         {
             desired = ClampToReach(mouse);
@@ -366,6 +384,19 @@ public sealed class SpineCurtainDragIK : MonoBehaviour
         Vector2 fromPivot = desired - pivot;
         return fromPivot.magnitude > maxReach
             ? pivot + fromPivot.normalized * maxReach : desired;
+    }
+
+    private Vector2 IdleBeatOffset()
+    {
+        if (!idleBeatHintEnabled || !gameplayControlled || Time.timeScale <= 0f ||
+            GhostInput.Suspended || !RhythmAccent.TryGetBeat(out double beatIndex, out _))
+            return Vector2.zero;
+
+        // One short, soft motion on each two-beat clap/snare accent.
+        float t = Mathf.Clamp01((float)RhythmAccent.PhaseInCycle(beatIndex) / 0.30f);
+        float lift = Mathf.Sin(t * Mathf.PI);
+        float sway = Mathf.Sin(t * Mathf.PI * 2f);
+        return new Vector2(maxReach * idleBeatSway * sway, maxReach * idleBeatLift * lift);
     }
 
     private Vector2 GetPlanarGravity()

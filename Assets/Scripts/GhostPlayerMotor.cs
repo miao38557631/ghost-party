@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>Single 3D collision-aware motor for the fixed-height 2.5D player. Input remains in existing gameplay.
-/// The root keeps floating: no gravity, but its height follows the floor surface underneath (sunken areas included).</summary>
+/// <summary>Floating 2.5D player motor. The ghost passes through scene props and walls,
+/// while marked floors and GhostAirWall barriers remain solid.</summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(CharacterController))]
 public sealed class GhostPlayerMotor : MonoBehaviour
@@ -30,7 +30,10 @@ public sealed class GhostPlayerMotor : MonoBehaviour
 
     CharacterController controller;
     readonly HashSet<Collider> floorColliders = new HashSet<Collider>();
+    readonly HashSet<Collider> ignoredColliders = new HashSet<Collider>();
     readonly RaycastHit[] probeHits = new RaycastHit[24];
+    const float CollisionRefreshInterval = 0.25f;
+    float nextCollisionRefresh;
     float verticalVelocity;
     float nextScanAt;
     bool hasFloor;
@@ -56,6 +59,16 @@ public sealed class GhostPlayerMotor : MonoBehaviour
         // One scan per scene load; a failed scan (floor streamed in later) is retried lazily.
         if (ScanFloor()) SnapToFloor();
         else nextScanAt = Time.time + 1f;
+        RefreshCollisionPairs();
+    }
+
+    void OnDisable()
+    {
+        if (controller == null) return;
+        foreach (Collider collider in ignoredColliders)
+            if (collider != null) Physics.IgnoreCollision(controller, collider, false);
+        ignoredColliders.Clear();
+        nextCollisionRefresh = 0f;
     }
 
     public CollisionFlags Move(Vector3 direction, float deltaTime)
@@ -84,6 +97,7 @@ public sealed class GhostPlayerMotor : MonoBehaviour
         verticalVelocity = 0f;
         Physics.SyncTransforms();
         SnapToFloor();
+        RefreshCollisionPairs();
     }
 
     /// <summary>Instantly places the root at hover height over the floor beneath it. No-op when no floor is under it.</summary>
@@ -105,7 +119,8 @@ public sealed class GhostPlayerMotor : MonoBehaviour
     CollisionFlags Sweep(Vector3 displacement)
     {
         if (!isActiveAndEnabled || !Controller.enabled) return CollisionFlags.None;
-        // Bounded sweeps handle long frames and thin authored walls; CharacterController handles sliding.
+        if (Time.time >= nextCollisionRefresh) RefreshCollisionPairs();
+        // Bounded sweeps handle long frames and thin marked air walls; CharacterController handles sliding.
         int steps = Mathf.Max(1, Mathf.CeilToInt(displacement.magnitude / 0.2f));
         Vector3 step = displacement / steps;
         CollisionFlags flags = CollisionFlags.None;
@@ -149,6 +164,32 @@ public sealed class GhostPlayerMotor : MonoBehaviour
         Controller.enabled = wasEnabled;
         verticalVelocity = 0f;
         Physics.SyncTransforms();
+        RefreshCollisionPairs();
+    }
+
+    void RefreshCollisionPairs()
+    {
+        if (!isActiveAndEnabled || !Controller.enabled) return;
+        nextCollisionRefresh = Time.time + CollisionRefreshInterval;
+        // Pair-specific ignores leave NPC, prop and floor physics unchanged.
+        // Reapply after controller re-enabling (Teleport/SetRootHeight reset ignore pairs).
+        Collider[] sceneColliders = FindObjectsOfType<Collider>();
+        for (int i = 0; i < sceneColliders.Length; i++)
+        {
+            Collider other = sceneColliders[i];
+            if (other == null || other == controller || other.transform.IsChildOf(transform)) continue;
+            bool solid = floorColliders.Contains(other) || other.GetComponentInParent<GhostAirWall>() != null;
+            if (solid)
+            {
+                if (ignoredColliders.Remove(other)) Physics.IgnoreCollision(controller, other, false);
+            }
+            else
+            {
+                Physics.IgnoreCollision(controller, other, true);
+                ignoredColliders.Add(other);
+            }
+        }
+        ignoredColliders.RemoveWhere(collider => collider == null);
     }
 
     bool TryProbeSurface(Vector3 rootPosition, out float surface)
