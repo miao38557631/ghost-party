@@ -92,7 +92,7 @@ public sealed class CurtainGameplayUI : MonoBehaviour
     public bool HasDesignerArtwork { get { return ghostWhite && ghostBlack && arrowWhite && arrowBlack
         && ringOuter && ringInner && mouseIdle && mousePressed && tapChinese && holdChinese && tapEnglish && holdEnglish; } }
 
-    public void AttachPlayerHud(Canvas host)
+    public void AttachPlayerHud(Canvas host, bool tutorialStyle = false)
     {
         if (playerHud != null || host == null) return;
         if (!HasDesignerArtwork) { Debug.LogError("Curtain designer artwork is not bound on the UI prefab.", this); return; }
@@ -117,11 +117,26 @@ public sealed class CurtainGameplayUI : MonoBehaviour
         mouseImage = Artwork("MouseButton", actionVisual, mouseIdle, new Vector2(-47f, -40f), new Vector2(27f, 34f));
         deviceLabel = PlayerText("GamepadButton", actionVisual, new Vector2(-4f, -40f), new Vector2(95f, 42f), 29);
         instructionBackplate = PlayerRect("Caption", playerHud, Vector2.zero, new Vector2(410f, 64f));
-        var back = instructionBackplate.gameObject.AddComponent<Image>();
-        back.color = new Color(0.08f, 0.07f, 0.1f, 0.57f);
-        back.raycastTarget = false;
+        if (tutorialStyle)
+        {
+            var paper = instructionBackplate.gameObject.AddComponent<TutorialPaper>();
+            paper.SetPaper(TutorialPaper.Cream);
+        }
+        else
+        {
+            var back = instructionBackplate.gameObject.AddComponent<Image>();
+            back.color = new Color(0.08f, 0.07f, 0.1f, 0.57f);
+            back.raycastTarget = false;
+        }
         playerInstruction = PlayerText("Instruction", instructionBackplate, new Vector2(0f, 12f), new Vector2(394f, 28f), 20);
         playerTiming = PlayerText("Timing", instructionBackplate, new Vector2(0f, -14f), new Vector2(394f, 24f), 16);
+        if (tutorialStyle)
+        {
+            playerInstruction.color = playerTiming.color = TutorialPaper.Ink;
+            playerInstruction.fontStyle = FontStyle.Bold;
+            playerInstruction.GetComponent<Outline>().enabled = false;
+            playerTiming.GetComponent<Outline>().enabled = false;
+        }
         playerFeedback = PlayerText("JudgementFeedback", playerHud, Vector2.zero, new Vector2(310f, 36f), 24);
         playerHud.gameObject.SetActive(false);
     }

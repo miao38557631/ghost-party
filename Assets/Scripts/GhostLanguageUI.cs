@@ -9,6 +9,9 @@ public sealed class GhostLanguageUI : MonoBehaviour
 {
     static GhostLanguageUI instance;
     Text label;
+    Image buttonBackground;
+    Button button;
+    TutorialPaper paper;
     string renderedLabel;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -39,10 +42,15 @@ public sealed class GhostLanguageUI : MonoBehaviour
         rect.anchorMin = rect.anchorMax = rect.pivot = Vector2.one;
         rect.anchoredPosition = new Vector2(-20f, -16f);
         rect.sizeDelta = new Vector2(208f, 42f);
-        var background = control.GetComponent<Image>();
-        background.color = new Color(0.08f, 0.07f, 0.1f, 0.65f);
-        var button = control.GetComponent<Button>();
-        button.targetGraphic = background;
+        buttonBackground = control.GetComponent<Image>();
+        button = control.GetComponent<Button>();
+        var paperObject = new GameObject("Tutorial paper", typeof(RectTransform), typeof(TutorialPaper));
+        paperObject.transform.SetParent(control.transform, false);
+        paper = paperObject.GetComponent<TutorialPaper>();
+        paper.SetPaper(TutorialPaper.Cream);
+        paper.rectTransform.anchorMin = Vector2.zero;
+        paper.rectTransform.anchorMax = Vector2.one;
+        paper.rectTransform.offsetMin = paper.rectTransform.offsetMax = Vector2.zero;
         button.navigation = new Navigation { mode = Navigation.Mode.None };
         button.onClick.AddListener(() =>
         {
@@ -61,14 +69,30 @@ public sealed class GhostLanguageUI : MonoBehaviour
         label.alignment = TextAnchor.MiddleCenter;
         label.color = Color.white;
         label.raycastTarget = false;
+        ApplyStyle(SceneManager.GetActiveScene());
         RefreshLabel();
     }
 
     void OnEnable() { SceneManager.sceneLoaded += SceneLoaded; }
     void OnDisable() { SceneManager.sceneLoaded -= SceneLoaded; }
     void OnDestroy() { if (instance == this) instance = null; }
+    void ApplyStyle(Scene scene)
+    {
+        bool gameplay = scene.path != GhostPartyOpening.ScenePath && scene.path != GhostPartyMainMenu.ScenePath;
+        button.gameObject.SetActive(gameplay);
+        if (!gameplay) return;
+
+        bool tutorial = scene.path == "Assets/TutorialScene.unity";
+        paper.gameObject.SetActive(tutorial);
+        buttonBackground.color = tutorial ? Color.clear : new Color(0.08f, 0.07f, 0.1f, 0.65f);
+        button.targetGraphic = tutorial ? (Graphic)paper : buttonBackground;
+        label.color = tutorial ? (Color)TutorialPaper.Ink : Color.white;
+    }
+
     void SceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        ApplyStyle(scene);
+        if (!button.gameObject.activeSelf) return;
         // Scene-owned input modules are reused; a floor with only IMGUI still
         // needs one to make the language button clickable.
         if (FindObjectOfType<EventSystem>() == null)
@@ -76,6 +100,7 @@ public sealed class GhostLanguageUI : MonoBehaviour
     }
     void Update()
     {
+        if (!button.isActiveAndEnabled) return;
         if (GhostInput.LanguagePressed) GhostLanguage.Toggle();
         RefreshLabel();
     }

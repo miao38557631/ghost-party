@@ -10,6 +10,7 @@ namespace GhostParty.LevelWhitebox
         Camera view;
         Transform player;
         Transform closeupAnchor;
+        Transform mapAnchor;
         WhiteboxCamera settings;
         Quaternion mapRotation;
         Vector3 velocity;
@@ -18,17 +19,18 @@ namespace GhostParty.LevelWhitebox
         float impactStartedAt = -1f;
         float impactStrength;
 
-        public void Initialize(Transform followedPlayer, WhiteboxCamera cameraSettings, float floorLeft, float floorRight)
+        public void Initialize(Transform followedPlayer, WhiteboxCamera cameraSettings, float floorLeft, float floorRight, Transform fixedMapAnchor = null)
         {
             view = GetComponent<Camera>();
             player = followedPlayer;
+            mapAnchor = fixedMapAnchor;
             settings = cameraSettings;
             leftX = floorLeft;
             rightX = floorRight;
             mapRotation = transform.rotation;
             view.orthographic = true;
             view.orthographicSize = 3.8f;
-            transform.position = player.position - transform.forward * 19.5f;
+            transform.position = (mapAnchor != null ? mapAnchor.position : player.position) - transform.forward * 19.5f;
         }
 
         public void EnterCloseup(Transform anchor)
@@ -63,6 +65,13 @@ namespace GhostParty.LevelWhitebox
                 targetRotation = Quaternion.LookRotation(focus - targetPosition, Vector3.up);
                 targetSize = 2.9f;
                 speed = 8f;
+            }
+            else if (mapAnchor != null)
+            {
+                targetRotation = mapRotation;
+                targetPosition = mapAnchor.position - mapRotation * Vector3.forward * 19.5f;
+                targetSize = 3.8f;
+                speed = 3.5f;
             }
             else
             {

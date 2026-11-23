@@ -24,6 +24,7 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
     GameObject chineseCaption;
     LevelCurtainEncounter encounter;
     WhiteboxPlayable floor;
+    GhostPartyTutorial tutorial;
 
     public Transform Anchor { get { return promptAnchor; } }
     public Image Bubble { get { return bubble; } }
@@ -35,6 +36,7 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
         view = sceneCamera;
         encounter = GetComponent<LevelCurtainEncounter>();
         floor = FindObjectOfType<WhiteboxPlayable>();
+        tutorial = FindObjectOfType<GhostPartyTutorial>();
         if (host == null) return;
         if (bubble == null)
         {
@@ -75,7 +77,8 @@ public sealed class CurtainPossessionPrompt : MonoBehaviour
         if (bubble == null) return;
         bool eligible = isActiveAndEnabled && host != null && host.isActiveAndEnabled &&
             view != null && promptAnchor != null && promptAnchor.gameObject.activeInHierarchy &&
-            floor != null && floor.IsCurrentPossessionTarget(encounter);
+            ((floor != null && floor.IsCurrentPossessionTarget(encounter)) ||
+             (tutorial != null && tutorial.IsCurrentPossessionTarget(encounter)));
         if (!eligible) { Hide(); return; }
         Sprite sprite = GhostInput.UsingGamepad ? gamepadSprite : keyboardSprite;
         Vector3 point = view.WorldToScreenPoint(promptAnchor.position);

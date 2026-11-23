@@ -49,6 +49,7 @@ public sealed class GhostPlayerVisual : MonoBehaviour
     float spineNaturalHeight = 1f;
     float displayedWorldY;
     float visualVerticalVelocity;
+    float verticalPoseOffset;
     bool visualHeightInitialized;
     public bool FacingRight { get; private set; } = true;
     public bool IsMoving { get; private set; }
@@ -89,6 +90,15 @@ public sealed class GhostPlayerVisual : MonoBehaviour
         if (spriteRenderer != null) spriteRenderer.enabled = false;
         if (animator != null) animator.enabled = false;
         PlaySpine(spineIdleAnimation);
+    }
+
+    // Temporary presentation offset in world units, independent of the player motor.
+    public void SetVerticalPoseOffset(float offset) { verticalPoseOffset = offset; }
+
+    public void FaceScreenRight(bool value)
+    {
+        FacingRight = value;
+        ApplyFacing();
     }
 
     public void SetMovement(Vector3 existingMovement)
@@ -132,7 +142,7 @@ public sealed class GhostPlayerVisual : MonoBehaviour
             }
             desiredLocalPosition.y += (displayedWorldY - targetWorldY) / Mathf.Max(0.0001f, parentScale);
         }
-        transform.localPosition = desiredLocalPosition;
+        transform.localPosition = desiredLocalPosition + Vector3.up * (verticalPoseOffset / parentScale);
         if (spine != null)
         {
             if (syncedClockRevision != RhythmAccent.ClockRevision) AlignSpineToBeat();

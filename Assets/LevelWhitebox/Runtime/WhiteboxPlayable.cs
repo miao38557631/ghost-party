@@ -24,6 +24,7 @@ namespace GhostParty.LevelWhitebox
         float floorLeftX;
         float floorRightX;
         bool secondFloor;
+        bool resumeTutorialCurtain;
 
         // Both the prompt and E/A resolve this same target, including stair priority.
         public Transform CurrentInteractionTarget
@@ -80,6 +81,7 @@ namespace GhostParty.LevelWhitebox
             if (arriveAtStair) GhostPlayerAvatar.Teleport(player, spawn);
             arriveAtStair = false;
 
+            resumeTutorialCurtain = !secondFloor && GhostPartyTutorial.ApplyFirstFloorHandoff();
             if (followCamera == null) followCamera = Camera.main;
             if (followCamera == null)
             {
@@ -107,6 +109,16 @@ namespace GhostParty.LevelWhitebox
         void Update()
         {
             if (player == null || GhostInput.Suspended) return;
+            if (resumeTutorialCurtain)
+            {
+                resumeTutorialCurtain = false;
+                if (curtainSpot != null && curtainPrank != null && curtainPrank.CanStart)
+                {
+                    GhostPlayerAvatar.Teleport(player, curtainSpot.position + CurtainSpawnOffset);
+                    curtainPrank.TryStart(true);
+                    return;
+                }
+            }
             if (curtainPrank != null && curtainPrank.IsActive)
             {
                 GhostPlayerAvatar.SetMovement(player, Vector3.zero);

@@ -149,6 +149,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [Header("Scene curtain visual")]
     [SerializeField, Tooltip("Level01 white Spine curtain; retain the interaction, collision and camera anchor.")]
     SpineCurtainDragIK curtainVisual;
+    [SerializeField] bool tutorialFirstTapOnly;
     [SerializeField, Min(0.1f)] float npcAttractionRadius = 8f;
     [SerializeField] float guestSpotXOffset = 2f;
     public SpineCurtainDragIK CurtainVisual => curtainVisual;
@@ -195,6 +196,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     Quaternion curtainRotationHome;
     bool embeddedInLevel;
     bool embeddedReady;
+    public bool TutorialTapConfirmed => tutorialFirstTapOnly && IsEmbeddedPrankActive && curtainStep > 0;
+
+    public void SetTutorialMusicBlend(float blend)
+    {
+        if (tutorialFirstTapOnly && music != null) music.volume = bgmVolume * Mathf.Clamp01(blend);
+    }
     Vector3 embeddedGhostReturnPosition;
     public event Action EmbeddedPrankFinished;
     Vector3 curtainScaleHome;
@@ -281,8 +288,10 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
-        // Level-only scenes are authored independently of the runtime prank prototype.
-        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().path.StartsWith("Assets/LevelWhitebox/", StringComparison.Ordinal)) return;
+        // These scenes are authored independently of the runtime prank prototype.
+        string scenePath = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path;
+        if (scenePath == GhostPartyMainMenu.ScenePath || scenePath == GhostPartyOpening.ScenePath ||
+            scenePath.StartsWith("Assets/LevelWhitebox/", StringComparison.Ordinal)) return;
         if (FindObjectOfType<GhostPartyPrototype>() != null) return;
         var go = new GameObject("GhostPartyPrototype_Runtime");
         instance = go.AddComponent<GhostPartyPrototype>();
@@ -295,7 +304,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         language = GhostLanguage.Current;
         Application.targetFrameRate = 120;
         if (curtainPlan == null || curtainPlan.Count == 0) curtainPlan = BuildDefaultCurtainPlan();
-        embeddedInLevel = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path == "Assets/LevelWhitebox/Scenes/Level01_FirstFloor.unity";
+        embeddedInLevel = tutorialFirstTapOnly || UnityEngine.SceneManagement.SceneManager.GetActiveScene().path == "Assets/LevelWhitebox/Scenes/Level01_FirstFloor.unity";
         if (embeddedInLevel) return; // WhiteboxPlayable creates the shared ghost after scene Awake.
         BuildWorld();
         BuildAudio();
@@ -312,7 +321,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         var player = ghost != null ? ghost.gameObject : GameObject.Find("InvisibleGhost");
         if (cam == null || player == null)
         {
-            Debug.LogError("Level01 curtain prank needs the whitebox camera and ghost.");
+            Debug.LogError("The curtain encounter needs a Main Camera and ghost player.", this);
             enabled = false;
             return;
         }
@@ -339,7 +348,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         guestActor = guest.GetComponent<PrankNpcActor>();
         if (guestActor == null) guestActor = guest.gameObject.AddComponent<PrankNpcActor>();
         guestNavigator = guest.GetComponent<NpcNavMover>();
-        if (guestNavigator != null)
+        if (guestNavigator != null && guestNavigator.enabled)
         {
             // This one authored guest guarantees a nearby candidate even when
             // the random spawner places every other NPC farther away.
@@ -348,10 +357,14 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         }
         guestActor.EnsureInitialized(cam);
         guestHead = guestActor.Head;
-        guestHeadHome = guestHead.position;
-        guestHeadScaleHome = guestHead.localScale;
+        if (guestHead != null)
+        {
+            guestHeadHome = guestHead.position;
+            guestHeadScaleHome = guestHead.localScale;
+        }
         guestScaleHome = guest.localScale;
         BuildAudio();
+        if (tutorialFirstTapOnly) SetTutorialMusicBlend(0f);
         BuildHud();
         SetExplorePrompt();
         SetEmbeddedHudVisible(false);
@@ -361,12 +374,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
     public bool IsEmbeddedPrankActive { get { return embeddedInLevel && embeddedReady && mode == Mode.Closeup; } }
     public bool CanStartEmbeddedPrank { get { return isActiveAndEnabled && embeddedInLevel && embeddedReady && mode == Mode.Explore; } }
 
-    public void StartEmbeddedPrank()
+    public void StartEmbeddedPrank(bool resumeAfterFirstTap = false)
     {
         if (!CanStartEmbeddedPrank) return;
         embeddedGhostReturnPosition = ghost.position;
         SetEmbeddedHudVisible(true);
-        BeginPrank();
+        BeginPrank(resumeAfterFirstTap);
     }
 
     void Update()
@@ -766,7 +779,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             // The player-facing HUD can operate without the optional world-space prefab.
             gameplayUI = canvas.gameObject.AddComponent<CurtainGameplayUI>();
         }
-        gameplayUI.AttachPlayerHud(canvas);
+        gameplayUI.AttachPlayerHud(canvas, tutorialFirstTapOnly);
         gameplayUI.BindCamera(cam);
         if (!gameplayUI.IsConfigured) return;
         worldCueCanvas = gameplayUI.CurrentCueCanvas;
@@ -833,6 +846,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
             cue.instruction = GhostInput.UsingGamepad ? T("靠近窗帘，按 A 附身", "Press A near the curtain") : T("靠近窗帘，按 E 开始", "Press E near the curtain");
             cue.timing = GhostInput.UsingGamepad ? T("左摇杆移动", "Left stick to move") : T("WASD 移动", "WASD to move");
             gameplayUI.PresentPlayerCue(!embeddedInLevel, cue, cam, curtainHome);
+            return;
+        }
+        if (TutorialTapConfirmed)
+        {
+            gameplayUI.PresentPlayerCue(false, cue, cam, curtainHome);
             return;
         }
         if (stage != PrankStage.CurtainSequence || curtainStep >= PlanCount)
@@ -1092,7 +1110,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     bool RegisterEmptyBeat()
     {
-        if (stage != PrankStage.CurtainSequence || curtainStep >= PlanCount) return true;
+        if (tutorialFirstTapOnly || stage != PrankStage.CurtainSequence || curtainStep >= PlanCount) return true;
         CurtainAction action = PlanAction(curtainStep);
         if (IsAutomaticAction(action)) return true;
         if (lastEscapeCountedBeat == curtainTargetBeat) return true;
@@ -1337,7 +1355,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         curtain.localScale = Vector3.Scale(curtainScaleHome, new Vector3(1f, 1f - 0.015f * tease, 1f));
     }
 
-    void BeginPrank()
+    void BeginPrank(bool resumeAfterFirstTap = false)
     {
         if (curtainVisual != null) curtainVisual.SetIdleBeatHint(false);
         GhostInput.BeginPossession();
@@ -1348,11 +1366,12 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         mode = Mode.Closeup; stage = PrankStage.CurtainSequence; stageStartedAt = Time.time; retryMessage = "";
         GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         GhostPlayerAvatar.SetVisible(ghost, false);
-        curtainStep = 0;
+        bool canResume = resumeAfterFirstTap && PlanCount > 1 && PlanAction(0) == CurtainAction.Tap;
+        curtainStep = canResume ? 1 : 0;
         approachStartedAt = -1f;
         renderedHudStep = -1;
         renderedCueStep = -1;
-        curtainTargetBeat = beatClock.NextWholeBeat(firstInputLeadBeats);
+        curtainTargetBeat = beatClock.NextWholeBeat(canResume ? Mathf.Max(2f, firstInputLeadBeats) : firstInputLeadBeats);
         ResetGestureState();
         curtain.position = curtainHome;
         curtain.rotation = curtainRotationHome;
@@ -1410,11 +1429,11 @@ public sealed class GhostPartyPrototype : MonoBehaviour
 
     void UpdateCloseup()
     {
-        if (GhostInput.CancelPressed) { ReturnToExplore(); return; }
+        if (!TutorialTapConfirmed && GhostInput.CancelPressed) { ReturnToExplore(); return; }
         GhostPlayerAvatar.SetMovement(ghost, Vector3.zero);
         closeupPulse += Time.deltaTime;
         UpdateStageHud();
-        if (stage == PrankStage.CurtainSequence) HandleCurtainSequence();
+        if (stage == PrankStage.CurtainSequence && !TutorialTapConfirmed) HandleCurtainSequence();
         else if ((stage == PrankStage.Complete || stage == PrankStage.Escaped) && Time.time - stageStartedAt > 1.8f) ReturnToExplore();
         UpdatePrankVisuals();
     }
@@ -1740,7 +1759,7 @@ public sealed class GhostPartyPrototype : MonoBehaviour
         if (embeddedInLevel && EmbeddedPrankFinished != null) EmbeddedPrankFinished();
         if (inputCueIcon != null) inputCueIcon.text = "";
         if (guestHead != null) guestHead.localScale = guestHeadScaleHome;
-        if (embeddedInLevel && guestNavigator != null)
+        if (embeddedInLevel && guestNavigator != null && guestNavigator.enabled)
         {
             bool returningAfterPrank = guestLeaveAt > 0f;
             guest.rotation = Quaternion.identity;
